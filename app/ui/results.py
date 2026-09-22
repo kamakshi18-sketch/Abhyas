@@ -42,31 +42,31 @@ def render_results_page() -> None:
     # Executive Score & Overview Card
     st.markdown(
         f"""
-        <div style="background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
+        <div class="glass-panel" style="padding: 1.75rem; margin-bottom: 1.5rem;">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
                 <div>
-                    <h3 style="margin: 0 0 0.25rem 0; font-size: 1.4rem; color: #f8fafc;">{config.candidate_name}</h3>
+                    <h3 style="margin: 0 0 0.25rem 0; font-size: 1.5rem; color: #ffffff; font-weight: 700;">{config.candidate_name}</h3>
                     <div style="color: #cbd5e1; font-size: 0.95rem;">
-                        Target Role: <b style="color: #f8fafc;">{config.role}</b> | Experience: <b style="color: #f8fafc;">{config.experience_level.value}</b>
+                        Target Role: <b style="color: #38bdf8;">{config.role}</b> | Experience: <b style="color: #f8fafc;">{config.experience_level.value}</b>
                     </div>
-                    <div style="color: #cbd5e1; font-size: 0.95rem; margin-top: 0.2rem;">
-                        Format: <b style="color: #f8fafc;">{config.interview_type.value}</b> | Difficulty: <b style="color: #f8fafc;">{config.difficulty.value}</b>
+                    <div style="color: #94a3b8; font-size: 0.9rem; margin-top: 0.25rem;">
+                        Format: <b style="color: #c084fc;">{config.interview_type.value}</b> | Difficulty: <b style="color: #f8fafc;">{config.difficulty.value}</b>
                     </div>
                 </div>
-                <div style="text-align: right; background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1); padding: 0.75rem 1.25rem; border-radius: 10px;">
-                    <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Overall Score</div>
-                    <div style="font-size: 2.2rem; font-weight: 800; color: {score_color}; line-height: 1.1;">
+                <div style="text-align: right; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); padding: 0.85rem 1.5rem; border-radius: 14px; box-shadow: 0 0 20px rgba(0,0,0,0.5);">
+                    <div style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; letter-spacing: 0.08em;">Overall Score</div>
+                    <div style="font-size: 2.4rem; font-weight: 800; color: {score_color}; line-height: 1.1;">
                         {score:.1f}<span style="font-size: 1.1rem; font-weight: 500; color: #94a3b8;"> / 10</span>
                     </div>
-                    <div style="font-size: 0.85rem; font-weight: 600; color: {score_color}; margin-top: 0.2rem;">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: {score_color}; margin-top: 0.2rem;">
                         {performance_tier}
                     </div>
                 </div>
             </div>
-            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 1.25rem 0;">
+            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 1.25rem 0;">
             <div>
-                <h4 style="margin: 0 0 0.5rem 0; color: #f8fafc;">Executive Summary</h4>
-                <p style="color: #cbd5e1; line-height: 1.6; margin: 0; font-size: 0.98rem;">
+                <h4 style="margin: 0 0 0.5rem 0; color: #f8fafc; font-size: 1.1rem;">Executive Assessment Summary</h4>
+                <p style="color: #cbd5e1; line-height: 1.6; margin: 0; font-size: 0.96rem;">
                     {summary.overall_feedback}
                 </p>
             </div>
@@ -76,12 +76,12 @@ def render_results_page() -> None:
     )
 
     # Key Strengths & Recommendations Grid
-    col_str, col_rec = st.columns(2)
+    col_str, col_rec = st.columns(2, gap="medium")
 
     with col_str:
         st.markdown(
             """
-            <div style="background: rgba(22, 101, 52, 0.25); border: 1px solid rgba(34, 197, 94, 0.35); border-radius: 10px; padding: 1.25rem; height: 100%;">
+            <div class="glass-panel" style="padding: 1.4rem; height: 100%; border-color: rgba(34, 197, 94, 0.3) !important;">
                 <h4 style="color: #4ade80; margin: 0 0 0.75rem 0; font-size: 1.05rem; font-weight: 700;">
                     🌟 Top Candidate Strengths
                 </h4>
@@ -98,8 +98,8 @@ def render_results_page() -> None:
     with col_rec:
         st.markdown(
             """
-            <div style="background: rgba(30, 58, 138, 0.25); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 10px; padding: 1.25rem; height: 100%;">
-                <h4 style="color: #60a5fa; margin: 0 0 0.75rem 0; font-size: 1.05rem; font-weight: 700;">
+            <div class="glass-panel" style="padding: 1.4rem; height: 100%; border-color: rgba(56, 189, 248, 0.3) !important;">
+                <h4 style="color: #38bdf8; margin: 0 0 0.75rem 0; font-size: 1.05rem; font-weight: 700;">
                     🎯 Recommended Growth Areas
                 </h4>
             """,

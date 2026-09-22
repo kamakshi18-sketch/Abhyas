@@ -286,49 +286,49 @@ def render_setup_page() -> None:
     st.markdown("#### 📋 7. Pre-Flight Interview Summary")
 
     summary_topics_str = ", ".join(final_topics) if final_topics else (role or "Software Engineering")
-    diff_badge_color = "#3b82f6" if selected_diff == "Adaptive" else ("#22c55e" if selected_diff == "Easy" else "#f59e0b")
+    diff_badge_color = "#38bdf8" if selected_diff == "Adaptive" else ("#22c55e" if selected_diff == "Easy" else "#f59e0b")
 
     st.markdown(
         f"""
-        <div style="background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 1.35rem; margin-bottom: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+        <div class="glass-panel" style="padding: 1.5rem; margin-bottom: 1.75rem;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Candidate</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{candidate_name or "Not Specified"}</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Candidate</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{candidate_name or "Not Specified"}</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Role</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{role or "Software Engineer"}</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Target Role</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{role or "Software Engineer"}</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Experience Tier</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{selected_exp}</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Experience Tier</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{selected_exp}</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Category & Mode</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #38bdf8;">{selected_type} ({selected_mode.value})</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Category & Mode</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #38bdf8; margin-top: 0.2rem;">{selected_type} ({selected_mode.value})</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Difficulty</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: {diff_badge_color};">{selected_diff}</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Difficulty</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: {diff_badge_color}; margin-top: 0.2rem;">{selected_diff}</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Length & Timing</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{num_questions} Questions (~{estimated_duration} mins)</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Length & Timing</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{num_questions} Questions (~{estimated_duration} mins)</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Persona & Tone</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #c4b5fd;">{selected_persona_str}</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Persona & Tone</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #c084fc; margin-top: 0.2rem;">{selected_persona_str}</div>
                 </div>
                 <div>
-                    <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Language</span>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{selected_lang}</div>
+                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Language</span>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{selected_lang}</div>
                 </div>
             </div>
-            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 1rem 0;">
+            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 1.25rem 0 1rem 0;">
             <div>
-                <span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Focus Topics Matrix:</span>
-                <div style="font-size: 0.95rem; color: #cbd5e1; margin-top: 0.25rem; line-height: 1.4;">
+                <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Focus Topics Matrix:</span>
+                <div style="font-size: 0.95rem; color: #cbd5e1; margin-top: 0.35rem; line-height: 1.5;">
                     <b>{summary_topics_str}</b>
                 </div>
             </div>
@@ -336,6 +336,7 @@ def render_setup_page() -> None:
         """,
         unsafe_allow_html=True,
     )
+
 
     # -------------------------------------------------------------
     # Launch Actions & Submission
