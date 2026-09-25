@@ -112,11 +112,12 @@ class QuestionGeneratorService:
         config: InterviewConfig,
         question_number: int,
         previous_questions: Optional[List[Question]] = None,
+        strategy: Optional[StrategyPlan] = None,
     ) -> Question:
         """
         Full Question Generation Pipeline:
-        1. Determine StrategyPlan.
-        2. Formulate targeted LLM prompt with Persona, Topic, Type, and Language.
+        1. Determine StrategyPlan (uses provided adaptive strategy or calculates baseline).
+        2. Formulate targeted LLM prompt with Persona, Topic, Type, Decision, and Language.
         3. Query LLM for structured Question output.
         4. Validate quality, duplicates, and topic restrictions.
         5. Retry on failure or fallback gracefully.
@@ -124,7 +125,7 @@ class QuestionGeneratorService:
         prev_qs = previous_questions or []
         
         # 1. Question Strategy
-        strategy = self.strategy_service.get_strategy_for_step(
+        active_strategy = strategy or self.strategy_service.get_strategy_for_step(
             config=config,
             question_number=question_number,
             asked_questions=prev_qs,
@@ -135,9 +136,10 @@ class QuestionGeneratorService:
             config=config,
             question_number=question_number,
             previous_questions=prev_qs,
-            effective_difficulty=strategy.difficulty,
-            strategy=strategy,
+            effective_difficulty=active_strategy.difficulty,
+            strategy=active_strategy,
         )
+
 
         last_error = None
         for attempt in range(self.max_retries + 1):
@@ -150,15 +152,15 @@ class QuestionGeneratorService:
 
                 # Ensure strategy parameters are enforced
                 question.question_number = question_number
-                question.topic = strategy.target_topic
-                question.category = question.category or strategy.category
-                question.difficulty = question.difficulty or strategy.difficulty
-                question.question_type = question.question_type or strategy.question_type
+                question.topic = active_strategy.target_topic
+                question.category = question.category or active_strategy.category
+                question.difficulty = question.difficulty or active_strategy.difficulty
+                question.question_type = question.question_type or active_strategy.question_type
 
                 # 3. Quality Control Validation
                 is_valid, reason = self.validator.validate(
                     question=question,
-                    strategy=strategy,
+                    strategy=active_strategy,
                     previous_questions=prev_qs,
                     config=config,
                 )
@@ -166,17 +168,20 @@ class QuestionGeneratorService:
                 if is_valid:
                     # Enrich metadata
                     question.metadata = {
-                        "strategy_objective": strategy.objective,
+                        "strategy_objective": active_strategy.objective,
                         "generation_attempt": attempt + 1,
                         "persona": config.interviewer_persona.value,
                         "language": config.language,
                     }
+                    if active_strategy.decision:
+                        question.metadata["decision_action"] = active_strategy.decision.action.value
+                        question.metadata["decision_reason"] = active_strategy.decision.reason
                     logger.info(f"Generated Q{question_number} [{question.question_type.value} | {question.topic}] on attempt {attempt + 1}")
                     return question
                 else:
                     logger.warning(f"Question validation failed (Attempt {attempt + 1}): {reason}")
                     last_error = reason
-                    prompt += f"\n\nCRITICAL FIX REQUIRED: Previous attempt failed validation ({reason}). Please formulate a fresh, distinct, and specific question on '{strategy.target_topic}'."
+                    prompt += f"\n\nCRITICAL FIX REQUIRED: Previous attempt failed validation ({reason}). Please formulate a fresh, distinct, and specific question on '{active_strategy.target_topic}'."
 
             except (LLMValidationError, LLMConnectionError, ValidationError, Exception) as e:
                 logger.warning(f"Error during structured question generation on attempt {attempt + 1}: {e}")
@@ -185,7 +190,7 @@ class QuestionGeneratorService:
 
         # 4. Fallback Heuristic Generator
         logger.error(f"LLM question generation failed after {self.max_retries + 1} attempts ({last_error}). Using deterministic fallback.")
-        return self._generate_fallback_question(config, strategy, question_number)
+        return self._generate_fallback_question(config, active_strategy, question_number)
 
     def _generate_fallback_question(
         self,
@@ -194,16 +199,38 @@ class QuestionGeneratorService:
         question_number: int,
     ) -> Question:
         """
-        Deterministic, high-quality fallback generator aligned to StrategyPlan and ExperienceLevel.
+        Deterministic, high-quality fallback generator aligned to StrategyPlan, DecisionAction, and ExperienceLevel.
         """
         role = config.role or "Software Engineer"
         topic = strategy.target_topic
         q_type = strategy.question_type
         exp = config.experience_level
         diff = strategy.difficulty
+        action = strategy.decision_action or (strategy.decision.action if strategy.decision else None)
 
-        # Fallback question bank by type and topic
-        if q_type == QuestionType.CONCEPTUAL:
+        # Customized fallback questions based on DecisionAction
+        if action == "FOLLOW_UP":
+            ref = strategy.context_reference or "the key mechanism"
+            text = f"Following up on your previous answer regarding {topic}, could you elaborate specifically on how you would address {ref} and handle potential concurrency or failure edge cases?"
+            concepts = [f"{topic} edge case handling", "Failure recovery", "Trade-off analysis"]
+            rubric = ["Precision of follow-up detail", "Technical accuracy", "Practical resilience"]
+        elif action == "DEEP_DIVE":
+            text = f"Let's dive deeper into {topic}. In a mission-critical, high-scale {role} environment, how does the internal memory model and execution runtime handle peak load without performance degradation?"
+            concepts = ["Memory management & GC/pointers", "Lock contention / asynchronous concurrency", "Low-level optimization"]
+            rubric = ["Architectural depth", "Internal execution comprehension", "Performance trade-offs"]
+        elif action == "CLARIFY":
+            text = f"To clarify your previous point on {topic}, could you clearly distinguish the underlying assumptions and trade-offs of your chosen implementation versus standard alternatives?"
+            concepts = ["Core trade-off justification", "Underlying assumptions", "Clear architectural reasoning"]
+            rubric = ["Clarity of thought", "Factual accuracy", "Structured communication"]
+        elif action == "REPHRASE":
+            text = f"To explore {topic} from another angle: suppose you are explaining this concept to a junior teammate with a practical real-world analogy. How would you describe what {topic} solves?"
+            concepts = [f"Foundational role of {topic}", "Core problem solved", "Intuitive real-world analogy"]
+            rubric = ["Conceptual clarity", "Simplicity and accuracy", "Communication effectiveness"]
+        elif action == "FINAL_QUESTION":
+            text = f"As our final question: looking back at our discussion across {topic} and system design, what is the single most critical architectural decision you would make for a {role} project, and why?"
+            concepts = ["Comprehensive system synthesis", "Strategic trade-off evaluation", "Executive engineering judgment"]
+            rubric = ["Holistic perspective", "Senior leadership judgment", "Clarity and impact"]
+        elif q_type == QuestionType.CONCEPTUAL:
             text = f"Can you explain the foundational architecture, core principles, and internal execution model of {topic} in modern {role} systems?"
             concepts = [f"{topic} architecture", "Core execution lifecycle", "Key advantages and limitations"]
             rubric = ["Conceptual depth", "Accuracy of technical terms", "Clarity of explanation"]
@@ -236,6 +263,7 @@ class QuestionGeneratorService:
                 text = f"As a {role}, what are the primary best practices, common anti-patterns, and testing strategies you apply when developing applications with {topic}?"
                 concepts = ["Idiomatic coding standards", "Error handling & validation", "Unit and integration testing"]
                 rubric = ["Code quality awareness", "Defensive programming", "Practical comprehension"]
+
 
         return Question(
             question_number=question_number,

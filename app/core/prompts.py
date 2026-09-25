@@ -58,7 +58,7 @@ def build_question_prompt(
     effective_difficulty: Optional[Difficulty] = None,
     strategy: Optional["StrategyPlan"] = None,
 ) -> str:
-    """Build user prompt for generating the next interview question adhering to the strategy plan."""
+    """Build user prompt for generating the next interview question adhering to the strategy plan and adaptive decision."""
     prev_q_texts = (
         "\n".join([f"- Q{q.question_number} [{q.question_type.value if hasattr(q, 'question_type') else 'Technical'} | {q.topic}]: {q.text or q.question_text}" for q in previous_questions])
         if previous_questions
@@ -70,6 +70,18 @@ def build_question_prompt(
     q_type_str = strategy.question_type.value if strategy else "Technical"
     objective_str = strategy.objective if strategy else f"Assess candidate competency on {target_topic}."
 
+    # Adaptive Directive Section
+    decision_section = ""
+    if strategy and strategy.decision:
+        dec = strategy.decision
+        decision_section = f"""
+ADAPTIVE DECISION DIRECTIVE: [{dec.action.value}]
+Decision Justification: {dec.reason}
+Assessment Focus: {dec.objective}
+"""
+        if dec.context_reference:
+            decision_section += f"Previous Response Context / Target Gap: \"{dec.context_reference}\"\n"
+
     return f"""Target Role: {config.role}
 Experience Level: {config.experience_level.value}
 Interview Category: {config.interview_type.value}
@@ -80,7 +92,7 @@ Difficulty Level: {diff.value}
 Interviewer Persona: {config.interviewer_persona.value}
 Interview Language: {config.language}
 Question Number: {question_number} of {config.num_questions}
-
+{decision_section}
 Previously asked questions in this session:
 {prev_q_texts}
 
@@ -88,7 +100,8 @@ STRICT QUALITY RULES:
 1. The question MUST specifically assess '{target_topic}'. Do not divert into unrelated subjects.
 2. The style of the question MUST be '{q_type_str}'.
 3. Do NOT repeat or paraphrase any previously asked question.
-4. Pitch the complexity precisely to the '{config.experience_level.value}' tier.
+4. Pitch the complexity precisely to the '{diff.value}' difficulty tier for a '{config.experience_level.value}' candidate.
+5. If an Adaptive Directive is provided (e.g. FOLLOW_UP, DEEP_DIVE, CLARIFY, REPHRASE), formulate the question to directly fulfill that directive.
 
 Expected JSON format:
 {{
@@ -110,6 +123,7 @@ Expected JSON format:
   "follow_up_possible": true
 }}
 """
+
 
 
 def build_evaluation_prompt(

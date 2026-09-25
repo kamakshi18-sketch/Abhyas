@@ -49,6 +49,7 @@ class QuestionGenerator:
         question_number: int,
         previous_questions: Optional[List[Question]] = None,
         history: Optional[List[QuestionEvaluationPair]] = None,
+        strategy: Optional["StrategyPlan"] = None,
     ) -> Question:
         """
         Generate a structured question by delegating to QuestionGeneratorService.
@@ -57,4 +58,6 @@ class QuestionGenerator:
             config=config,
             question_number=question_number,
             previous_questions=previous_questions,
+            strategy=strategy,
         )
+

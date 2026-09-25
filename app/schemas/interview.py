@@ -114,6 +114,29 @@ class InterviewConfig(BaseModel):
         return self
 
 
+class DecisionAction(str, Enum):
+    """Adaptive interview engine branching and difficulty actions."""
+    FOLLOW_UP = "FOLLOW_UP"
+    DEEP_DIVE = "DEEP_DIVE"
+    CLARIFY = "CLARIFY"
+    NEW_TOPIC = "NEW_TOPIC"
+    INCREASE_DIFFICULTY = "INCREASE_DIFFICULTY"
+    DECREASE_DIFFICULTY = "DECREASE_DIFFICULTY"
+    REPHRASE = "REPHRASE"
+    MOVE_ON = "MOVE_ON"
+    FINAL_QUESTION = "FINAL_QUESTION"
+
+
+class InterviewDecision(BaseModel):
+    """Decision produced by the Decision Engine controlling next question strategy."""
+    action: DecisionAction = Field(..., description="Strategic adaptive action to take")
+    reason: str = Field(..., description="Justification explaining why this action was selected")
+    target_topic: Optional[str] = Field(default=None, description="Topic for the next question")
+    target_difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Calibrated difficulty level")
+    objective: str = Field(..., description="Specific assessment objective for next question")
+    context_reference: Optional[str] = Field(default=None, description="Optional quote or concept reference from previous answer")
+
+
 class QuestionType(str, Enum):
     """Specific pedagogical and evaluative style of an interview question."""
     TECHNICAL = "Technical"
@@ -134,6 +157,10 @@ class StrategyPlan(BaseModel):
     category: str = Field(default="Technical", description="Broad category")
     difficulty: Difficulty = Field(default=Difficulty.MEDIUM)
     objective: str = Field(..., description="Assessment objective and pedagogical focus")
+    decision: Optional[InterviewDecision] = Field(default=None, description="Adaptive decision driving this strategy step")
+    decision_action: Optional[DecisionAction] = Field(default=None, description="Direct action shortcut")
+    context_reference: Optional[str] = Field(default=None, description="Contextual excerpt from previous response")
+
 
 
 class Question(BaseModel):
@@ -380,3 +407,22 @@ class InterviewResult(BaseModel):
     summary: InterviewSummary
     created_at: Optional[str] = None
     completed_at: Optional[str] = None
+
+
+class InterviewState(BaseModel):
+    """Live state snapshot of the active interview session."""
+    current_topic: Optional[str] = Field(default=None, description="Current topic being evaluated")
+    topics_covered: List[str] = Field(default_factory=list, description="List of topics evaluated so far")
+    topics_remaining: List[str] = Field(default_factory=list, description="List of topics not yet evaluated")
+    strengths: List[str] = Field(default_factory=list, description="Aggregated strengths identified across session")
+    weaknesses: List[str] = Field(default_factory=list, description="Aggregated areas needing improvement")
+    previous_questions: List[Question] = Field(default_factory=list, description="All questions asked so far")
+    previous_answers: List[CandidateAnswer] = Field(default_factory=list, description="All candidate answers submitted so far")
+    previous_evaluations: List[AnswerEvaluation] = Field(default_factory=list, description="All answer evaluations so far")
+    difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Current calibrated difficulty")
+    question_count: int = Field(default=0, ge=0, description="Total number of questions answered")
+    interview_progress: float = Field(default=0.0, ge=0.0, le=1.0, description="Session progress ratio (0.0 to 1.0)")
+    consecutive_high_scores: int = Field(default=0, ge=0, description="Consecutive scores >= 7.5")
+    consecutive_low_scores: int = Field(default=0, ge=0, description="Consecutive scores <= 4.5")
+    latest_decision: Optional[InterviewDecision] = Field(default=None, description="Most recent decision from the Decision Engine")
+
