@@ -1,6 +1,7 @@
 """
 Google Gemini API LLM Service implementation.
 Provides structured generation, text generation, and health checks via Gemini REST API.
+Optimized with persistent connection pooling, cached schema inspection, and bounded retries.
 """
 
 import json
@@ -12,10 +13,14 @@ from pydantic import BaseModel, ValidationError
 
 from app.config.settings import get_settings
 from app.ai.ollama_client import LLMService, LLMConnectionError, LLMValidationError
+from app.performance.timers import Timer
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+# Cache for Pydantic schema hints to avoid redundant JSON schema generation
+_SCHEMA_HINTS_CACHE: Dict[Type[BaseModel], str] = {}
 
 
 class GeminiService(LLMService):
@@ -35,10 +40,31 @@ class GeminiService(LLMService):
         self.timeout = timeout or settings.llm_timeout_seconds
         self.default_temperature = settings.llm_temperature
         self.max_retries = settings.max_llm_retries
+        
+        # Reusable HTTP client with connection pooling and keep-alive
+        self._client: Optional[httpx.Client] = None
         logger.info(f"Initialized GeminiService with model='{self.model}'")
 
+    def _get_client(self) -> httpx.Client:
+        """Get or lazily initialize reusable httpx.Client with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(
+                timeout=httpx.Timeout(self.timeout, connect=5.0),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
+        return self._client
+
+    def close(self) -> None:
+        """Close underlying HTTP client if open."""
+        if self._client is not None and not self._client.is_closed:
+            self._client.close()
+            self._client = None
+
+    def __del__(self):
+        self.close()
+
     def set_model(self, model_name: str) -> None:
-        """Dynamically switch Gemini model (e.g. gemini-1.5-flash -> gemini-2.0-flash)."""
+        """Dynamically switch Gemini model."""
         self.model = model_name
         logger.info(f"Switched Gemini model to: {model_name}")
 
@@ -53,15 +79,15 @@ class GeminiService(LLMService):
 
         url = f"{self.BASE_URL}/models?key={self.api_key}"
         try:
-            with httpx.Client(timeout=10.0) as client:
-                resp = client.get(url)
-                if resp.status_code == 200:
-                    return True, f"Google Gemini is connected ({self.model} ready)."
-                elif resp.status_code == 400 or resp.status_code == 403:
-                    err_json = resp.json().get("error", {})
-                    return False, f"Gemini API authentication failed: {err_json.get('message', 'Invalid API key')}"
-                else:
-                    return False, f"Gemini API returned status {resp.status_code}: {resp.text[:150]}"
+            client = self._get_client()
+            resp = client.get(url, timeout=10.0)
+            if resp.status_code == 200:
+                return True, f"Google Gemini is connected ({self.model} ready)."
+            elif resp.status_code == 400 or resp.status_code == 403:
+                err_json = resp.json().get("error", {})
+                return False, f"Gemini API authentication failed: {err_json.get('message', 'Invalid API key')}"
+            else:
+                return False, f"Gemini API returned status {resp.status_code}: {resp.text[:150]}"
         except Exception as e:
             return False, f"Cannot reach Google Gemini API: {str(e)}"
 
@@ -80,13 +106,14 @@ class GeminiService(LLMService):
         system: Optional[str] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Generate plain text using Gemini API."""
+        """Generate plain text using Gemini API with connection pooling."""
         if not self.api_key:
             raise LLMConnectionError("Google Gemini API key is not configured.")
 
         temp = temperature if temperature is not None else self.default_temperature
         models_to_try = list(dict.fromkeys([self.model, "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.6-flash"]))
 
+        client = self._get_client()
         for model_candidate in models_to_try:
             url = f"{self.BASE_URL}/models/{model_candidate}:generateContent?key={self.api_key}"
             payload = {
@@ -97,18 +124,18 @@ class GeminiService(LLMService):
                 payload["system_instruction"] = {"parts": [{"text": system}]}
 
             try:
-                with httpx.Client(timeout=15.0) as client:
-                    resp = client.post(url, json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        text = data["candidates"][0]["content"]["parts"][0]["text"]
-                        return text.strip()
-                    elif resp.status_code in (404, 429, 503):
-                        logger.warning(f"Gemini model {model_candidate} returned {resp.status_code}. Fast-switching to next model...")
-                        continue
-                    else:
-                        logger.warning(f"Gemini model {model_candidate} error ({resp.status_code}): {resp.text[:120]}")
-                        continue
+                with Timer("gemini_text_request"):
+                    resp = client.post(url, json=payload, timeout=self.timeout)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    return text.strip()
+                elif resp.status_code in (404, 429, 503):
+                    logger.warning(f"Gemini model {model_candidate} returned {resp.status_code}. Fast-switching to next model...")
+                    continue
+                else:
+                    logger.warning(f"Gemini model {model_candidate} error ({resp.status_code}): {resp.text[:120]}")
+                    continue
             except Exception as e:
                 logger.warning(f"Gemini request exception with {model_candidate}: {e}")
                 continue
@@ -128,12 +155,14 @@ class GeminiService(LLMService):
 
         temp = temperature if temperature is not None else self.default_temperature
         
-        # Build schema guidelines for exact field matching
-        try:
-            schema_props = list(schema.model_json_schema().get("properties", {}).keys())
-            schema_hint = f"Required JSON fields: {', '.join(schema_props)}"
-        except Exception:
-            schema_hint = ""
+        # Cached schema properties inspection
+        if schema not in _SCHEMA_HINTS_CACHE:
+            try:
+                schema_props = list(schema.model_json_schema().get("properties", {}).keys())
+                _SCHEMA_HINTS_CACHE[schema] = f"Required JSON fields: {', '.join(schema_props)}"
+            except Exception:
+                _SCHEMA_HINTS_CACHE[schema] = ""
+        schema_hint = _SCHEMA_HINTS_CACHE[schema]
 
         json_system = (
             (system or "")
@@ -142,6 +171,7 @@ class GeminiService(LLMService):
 
         models_to_try = list(dict.fromkeys([self.model, "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3.6-flash"]))
 
+        client = self._get_client()
         last_error = None
         for model_candidate in models_to_try:
             candidate_url = f"{self.BASE_URL}/models/{model_candidate}:generateContent?key={self.api_key}"
@@ -155,24 +185,24 @@ class GeminiService(LLMService):
             }
 
             try:
-                with httpx.Client(timeout=15.0) as client:
-                    resp = client.post(candidate_url, json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        candidates = data.get("candidates", [])
-                        if not candidates:
-                            raise LLMValidationError(f"No candidates returned from {model_candidate}: {data}")
-                        raw_text = candidates[0]["content"]["parts"][0]["text"].strip()
-                        cleaned_json = self._extract_json_string(raw_text)
-                        return schema.model_validate_json(cleaned_json)
-                    elif resp.status_code in (404, 429, 503):
-                        logger.warning(f"Model {model_candidate} returned HTTP {resp.status_code}. Immediately trying next candidate...")
-                        last_error = f"HTTP {resp.status_code} from {model_candidate}"
-                        continue
-                    else:
-                        last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
-                        logger.warning(f"Model {model_candidate} unexpected status {resp.status_code}: {resp.text[:120]}")
-                        continue
+                with Timer("gemini_structured_request"):
+                    resp = client.post(candidate_url, json=payload, timeout=self.timeout)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        raise LLMValidationError(f"No candidates returned from {model_candidate}: {data}")
+                    raw_text = candidates[0]["content"]["parts"][0]["text"].strip()
+                    cleaned_json = self._extract_json_string(raw_text)
+                    return schema.model_validate_json(cleaned_json)
+                elif resp.status_code in (404, 429, 503):
+                    logger.warning(f"Model {model_candidate} returned HTTP {resp.status_code}. Immediately trying next candidate...")
+                    last_error = f"HTTP {resp.status_code} from {model_candidate}"
+                    continue
+                else:
+                    last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
+                    logger.warning(f"Model {model_candidate} unexpected status {resp.status_code}: {resp.text[:120]}")
+                    continue
             except (json.JSONDecodeError, ValidationError) as e:
                 last_error = e
                 logger.warning(f"Model {model_candidate} JSON validation error: {e}. Trying fallback model...")
@@ -186,20 +216,18 @@ class GeminiService(LLMService):
             f"Failed to produce valid structured output for schema '{schema.__name__}'. Last error: {last_error}"
         )
 
-
     def chat(
         self,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
     ) -> str:
-        """Chat interaction using Gemini format."""
+        """Chat interaction using Gemini format with connection pooling."""
         if not self.api_key:
             raise LLMConnectionError("Google Gemini API key is not configured.")
 
         temp = temperature if temperature is not None else self.default_temperature
         url = f"{self.BASE_URL}/models/{self.model}:generateContent?key={self.api_key}"
 
-        # Convert standard OpenAI-style messages to Gemini contents format
         contents = []
         for m in messages:
             role = "user" if m.get("role") in ("user", "system") else "model"
@@ -211,12 +239,13 @@ class GeminiService(LLMService):
         }
 
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.post(url, json=payload)
-                if resp.status_code != 200:
-                    raise LLMConnectionError(f"Gemini chat error ({resp.status_code}): {resp.text}")
-                data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            client = self._get_client()
+            with Timer("gemini_chat_request"):
+                resp = client.post(url, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                raise LLMConnectionError(f"Gemini chat error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
             logger.error(f"Gemini chat error: {e}")
             raise LLMConnectionError(f"Gemini chat failed: {e}") from e

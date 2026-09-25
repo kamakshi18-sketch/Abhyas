@@ -26,14 +26,12 @@ def render_setup_page() -> None:
     config_service = get_config_service()
 
     st.markdown(
-        """
-        <div style="margin-bottom: 1.5rem;">
-            <h2 style="margin-bottom: 0.2rem; color: #f8fafc;">⚙️ Advanced Interview Configuration</h2>
-            <p style="color: #94a3b8; font-size: 0.95rem;">
-                Configure every dimension of the interview engine: topics matrix, persona tone, adaptive difficulty, and session timing.
-            </p>
-        </div>
-        """,
+        """<div style="margin-bottom: 1.5rem;">
+<h2 style="margin-bottom: 0.2rem; color: #f8fafc;">⚙️ Advanced Interview Configuration</h2>
+<p style="color: #94a3b8; font-size: 0.95rem;">
+Configure every dimension of the interview engine: topics matrix, persona tone, adaptive difficulty, and session timing.
+</p>
+</div>""",
         unsafe_allow_html=True,
     )
 
@@ -184,17 +182,35 @@ def render_setup_page() -> None:
     personas_dict = config_service.get_personas()
     persona_options = [p.value for p in personas_dict.keys()]
 
+    from app.services.persona_service import PersonaService
+
     with col_p1:
         selected_persona_str = st.selectbox(
-            "Interviewer Persona & Coaching Tone",
+            "Interviewer Persona & Demeanor (Phase 7)",
             options=persona_options,
             index=persona_options.index(InterviewerPersona.PROFESSIONAL.value),
-            help="Controls AI evaluation strictness, interview tone, and communication style.",
+            help="Configures greeting, wording, conversational warmth, and transition style. Does NOT affect grading fairness.",
         )
         selected_persona = InterviewerPersona(selected_persona_str)
+        profile = PersonaService.get_profile(selected_persona)
 
-        # Show persona description card
-        st.info(f"💡 **Tone Style:** {personas_dict[selected_persona]}")
+        # Persona Profile Card
+        warmth_pct = int(profile.conversational_warmth * 100)
+        warmth_color = "#38bdf8" if warmth_pct >= 70 else ("#facc15" if warmth_pct >= 40 else "#f87171")
+        st.markdown(
+            f"""<div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 0.85rem; margin-top: 0.35rem;">
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+    <b style="color: #f8fafc; font-size: 0.95rem;">🎭 {profile.name} Persona</b>
+    <span style="color: {warmth_color}; font-size: 0.8rem; font-weight: 600; background: rgba(0,0,0,0.3); padding: 0.15rem 0.5rem; border-radius: 4px;">
+        Warmth: {warmth_pct}%
+    </span>
+</div>
+<div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 0.4rem;">{profile.description}</div>
+<div style="font-size: 0.8rem; color: #cbd5e1; margin-bottom: 0.3rem;"><b>💬 Sample:</b> <i>"{profile.sample_phrase}"</i></div>
+<div style="font-size: 0.76rem; color: #64748b;">⚖️ <i>Evaluation standards and scoring criteria remain 100% objective and identical across all personas.</i></div>
+</div>""",
+            unsafe_allow_html=True,
+        )
 
     with col_p2:
         supported_langs = config_service.get_supported_languages()
@@ -286,57 +302,54 @@ def render_setup_page() -> None:
     st.markdown("#### 📋 7. Pre-Flight Interview Summary")
 
     summary_topics_str = ", ".join(final_topics) if final_topics else (role or "Software Engineering")
-    diff_badge_color = "#38bdf8" if selected_diff == "Adaptive" else ("#22c55e" if selected_diff == "Easy" else "#f59e0b")
+    diff_badge_color = "#3b82f6" if selected_diff == "Adaptive" else ("#22c55e" if selected_diff == "Easy" else "#f59e0b")
 
     st.markdown(
-        f"""
-        <div class="glass-panel" style="padding: 1.5rem; margin-bottom: 1.75rem;">
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem;">
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Candidate</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{candidate_name or "Not Specified"}</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Target Role</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{role or "Software Engineer"}</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Experience Tier</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{selected_exp}</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Category & Mode</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #38bdf8; margin-top: 0.2rem;">{selected_type} ({selected_mode.value})</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Difficulty</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: {diff_badge_color}; margin-top: 0.2rem;">{selected_diff}</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Length & Timing</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{num_questions} Questions (~{estimated_duration} mins)</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Persona & Tone</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #c084fc; margin-top: 0.2rem;">{selected_persona_str}</div>
-                </div>
-                <div>
-                    <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Language</span>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">{selected_lang}</div>
-                </div>
-            </div>
-            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 1.25rem 0 1rem 0;">
-            <div>
-                <span style="font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Focus Topics Matrix:</span>
-                <div style="font-size: 0.95rem; color: #cbd5e1; margin-top: 0.35rem; line-height: 1.5;">
-                    <b>{summary_topics_str}</b>
-                </div>
-            </div>
-        </div>
-        """,
+        f"""<div style="background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 1.35rem; margin-bottom: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Candidate</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{candidate_name or "Not Specified"}</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Role</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{role or "Software Engineer"}</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Experience Tier</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{selected_exp}</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Category & Mode</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #38bdf8;">{selected_type} ({selected_mode.value})</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Difficulty</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: {diff_badge_color};">{selected_diff}</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Length & Timing</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{num_questions} Questions (~{estimated_duration} mins)</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Persona & Tone</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #c4b5fd;">{selected_persona_str}</div>
+</div>
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Language</span>
+<div style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">{selected_lang}</div>
+</div>
+</div>
+<hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 1rem 0;">
+<div>
+<span style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Focus Topics Matrix:</span>
+<div style="font-size: 0.95rem; color: #cbd5e1; margin-top: 0.25rem; line-height: 1.4;">
+<b>{summary_topics_str}</b>
+</div>
+</div>
+</div>""",
         unsafe_allow_html=True,
     )
-
 
     # -------------------------------------------------------------
     # Launch Actions & Submission

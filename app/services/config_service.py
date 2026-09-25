@@ -62,14 +62,16 @@ class ConfigurationService:
         ],
     }
 
-    # Persona definitions and coaching style descriptions
+    # Persona definitions and coaching style descriptions (Phase 7)
     _PERSONA_DESCRIPTIONS: Dict[InterviewerPersona, str] = {
         InterviewerPersona.PROFESSIONAL: "Balanced, objective, and neutral standard hiring panel tone.",
-        InterviewerPersona.EMPATHETIC: "Encouraging, supportive, providing warm feedback and guidance.",
-        InterviewerPersona.STRICT: "Demanding high precision, challenging assumptions and edge cases.",
-        InterviewerPersona.FAANG_LEAD: "Deep focus on scalability, optimal algorithms, and distributed systems.",
-        InterviewerPersona.STARTUP_FOUNDER: "Practical, fast execution, cross-functional ownership, and agility.",
-        InterviewerPersona.FAST_PACED: "Concise, rapid-fire screening evaluating quick recall and breadth.",
+        InterviewerPersona.FRIENDLY: "Encouraging, supportive, providing warm feedback and guidance.",
+        InterviewerPersona.CONVERSATIONAL: "Relaxed, collaborative peer whiteboarding and natural dialogue.",
+        InterviewerPersona.TECHNICAL_EXPERT: "Deep analytical focus on internals, protocols, and architectural trade-offs.",
+        InterviewerPersona.STRICT: "Demanding high precision, challenging assumptions, edge cases, and zero hand-waving.",
+        InterviewerPersona.STARTUP: "Practical, fast execution, cross-functional ownership, and agility.",
+        InterviewerPersona.HR: "Interpersonal behavioral dynamics, culture, communication, and STAR competencies.",
+        InterviewerPersona.SENIOR_ENGINEER: "Deep focus on production viability, scalability, fault tolerance, and systems maintainability.",
     }
 
     # Supported interview languages

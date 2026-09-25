@@ -16,6 +16,8 @@ from app.schemas.interview import (
     StrategyPlan,
     Difficulty,
     ExperienceLevel,
+    InterviewDecision,
+    DecisionAction,
 )
 from app.ai.ollama_client import LLMService, LLMValidationError, LLMConnectionError
 from app.core.question_strategy import QuestionStrategyService
@@ -24,7 +26,16 @@ from app.core.prompts import (
     build_question_prompt,
 )
 
+from app.performance.timers import Timer
+
 logger = logging.getLogger(__name__)
+
+_TOKEN_REGEX = re.compile(r"\b\w{3,}\b")
+_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "this", "that", "what", "how", "can", "you",
+    "explain", "describe", "would", "your", "using", "from", "which", "when",
+    "does", "are", "into", "their", "have", "been",
+})
 
 
 class QuestionValidator:
@@ -33,15 +44,10 @@ class QuestionValidator:
     @staticmethod
     def _tokenize(text: str) -> Set[str]:
         """Convert text into normalized alphanumeric stemmed word tokens."""
-        words = re.findall(r"\b\w{3,}\b", text.lower())
-        stopwords = {
-            "the", "and", "for", "with", "this", "that", "what", "how", "can", "you",
-            "explain", "describe", "would", "your", "using", "from", "which", "when",
-            "does", "are", "into", "their", "have", "been",
-        }
+        words = _TOKEN_REGEX.findall(text.lower())
         stemmed = set()
         for w in words:
-            if w in stopwords:
+            if w in _STOPWORDS:
                 continue
             if w.endswith("ies"):
                 w = w[:-3] + "y"
@@ -112,124 +118,124 @@ class QuestionGeneratorService:
         config: InterviewConfig,
         question_number: int,
         previous_questions: Optional[List[Question]] = None,
-        strategy: Optional[StrategyPlan] = None,
+        decision: Optional[InterviewDecision] = None,
     ) -> Question:
         """
         Full Question Generation Pipeline:
-        1. Determine StrategyPlan (uses provided adaptive strategy or calculates baseline).
-        2. Formulate targeted LLM prompt with Persona, Topic, Type, Decision, and Language.
+        1. Determine StrategyPlan (incorporating adaptive InterviewDecision if provided).
+        2. Formulate targeted LLM prompt with Persona, Topic, Type, Language, and Adaptive Directives.
         3. Query LLM for structured Question output.
         4. Validate quality, duplicates, and topic restrictions.
         5. Retry on failure or fallback gracefully.
         """
-        prev_qs = previous_questions or []
-        
-        # 1. Question Strategy
-        active_strategy = strategy or self.strategy_service.get_strategy_for_step(
-            config=config,
-            question_number=question_number,
-            asked_questions=prev_qs,
-        )
+        with Timer("question_generation_pipeline"):
+            prev_qs = previous_questions or []
+            
+            # 1. Question Strategy
+            strategy = self.strategy_service.get_strategy_for_step(
+                config=config,
+                question_number=question_number,
+                asked_questions=prev_qs,
+                decision=decision,
+            )
 
-        # 2. LLM Generation Loop with Quality Control
-        prompt = build_question_prompt(
-            config=config,
-            question_number=question_number,
-            previous_questions=prev_qs,
-            effective_difficulty=active_strategy.difficulty,
-            strategy=active_strategy,
-        )
+            # 2. LLM Generation Loop with Quality Control
+            prompt = build_question_prompt(
+                config=config,
+                question_number=question_number,
+                previous_questions=prev_qs,
+                effective_difficulty=strategy.difficulty,
+                strategy=strategy,
+                decision=decision,
+            )
 
+            last_error = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    question = self.llm_service.generate_structured(
+                        prompt=prompt,
+                        schema=Question,
+                        system=QUESTION_GENERATOR_SYSTEM_PROMPT,
+                    )
 
-        last_error = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                question = self.llm_service.generate_structured(
-                    prompt=prompt,
-                    schema=Question,
-                    system=QUESTION_GENERATOR_SYSTEM_PROMPT,
-                )
+                    # Ensure strategy parameters are enforced
+                    question.question_number = question_number
+                    question.topic = strategy.target_topic
+                    question.category = question.category or strategy.category
+                    question.difficulty = question.difficulty or strategy.difficulty
+                    question.question_type = question.question_type or strategy.question_type
 
-                # Ensure strategy parameters are enforced
-                question.question_number = question_number
-                question.topic = active_strategy.target_topic
-                question.category = question.category or active_strategy.category
-                question.difficulty = question.difficulty or active_strategy.difficulty
-                question.question_type = question.question_type or active_strategy.question_type
+                    # 3. Quality Control Validation
+                    is_valid, reason = self.validator.validate(
+                        question=question,
+                        strategy=strategy,
+                        previous_questions=prev_qs,
+                        config=config,
+                    )
 
-                # 3. Quality Control Validation
-                is_valid, reason = self.validator.validate(
-                    question=question,
-                    strategy=active_strategy,
-                    previous_questions=prev_qs,
-                    config=config,
-                )
+                    if is_valid:
+                        # Enrich metadata
+                        question.metadata = {
+                            "strategy_objective": strategy.objective,
+                            "generation_attempt": attempt + 1,
+                            "persona": config.interviewer_persona.value,
+                            "language": config.language,
+                            "decision_action": decision.action.value if decision else None,
+                            "decision_reason": decision.reason if decision else None,
+                        }
+                        logger.info(f"Generated Q{question_number} [{question.question_type.value} | {question.topic}] on attempt {attempt + 1}")
+                        return question
+                    else:
+                        logger.warning(f"Question validation failed (Attempt {attempt + 1}): {reason}")
+                        last_error = reason
+                        prompt += f"\n\nCRITICAL FIX REQUIRED: Previous attempt failed validation ({reason}). Please formulate a fresh, distinct, and specific question on '{strategy.target_topic}'."
 
-                if is_valid:
-                    # Enrich metadata
-                    question.metadata = {
-                        "strategy_objective": active_strategy.objective,
-                        "generation_attempt": attempt + 1,
-                        "persona": config.interviewer_persona.value,
-                        "language": config.language,
-                    }
-                    if active_strategy.decision:
-                        question.metadata["decision_action"] = active_strategy.decision.action.value
-                        question.metadata["decision_reason"] = active_strategy.decision.reason
-                    logger.info(f"Generated Q{question_number} [{question.question_type.value} | {question.topic}] on attempt {attempt + 1}")
-                    return question
-                else:
-                    logger.warning(f"Question validation failed (Attempt {attempt + 1}): {reason}")
-                    last_error = reason
-                    prompt += f"\n\nCRITICAL FIX REQUIRED: Previous attempt failed validation ({reason}). Please formulate a fresh, distinct, and specific question on '{active_strategy.target_topic}'."
+                except (LLMValidationError, LLMConnectionError, ValidationError, Exception) as e:
+                    logger.warning(f"Error during structured question generation on attempt {attempt + 1}: {e}")
+                    last_error = str(e)
+                    prompt += f"\n\nJSON Parse Error: Please return strict JSON matching the Question schema."
 
-            except (LLMValidationError, LLMConnectionError, ValidationError, Exception) as e:
-                logger.warning(f"Error during structured question generation on attempt {attempt + 1}: {e}")
-                last_error = str(e)
-                prompt += f"\n\nJSON Parse Error: Please return strict JSON matching the Question schema."
-
-        # 4. Fallback Heuristic Generator
-        logger.error(f"LLM question generation failed after {self.max_retries + 1} attempts ({last_error}). Using deterministic fallback.")
-        return self._generate_fallback_question(config, active_strategy, question_number)
+            # 4. Fallback Heuristic Generator
+            logger.error(f"LLM question generation failed after {self.max_retries + 1} attempts ({last_error}). Using deterministic fallback.")
+            return self._generate_fallback_question(config, strategy, question_number, decision=decision)
 
     def _generate_fallback_question(
         self,
         config: InterviewConfig,
         strategy: StrategyPlan,
         question_number: int,
+        decision: Optional[InterviewDecision] = None,
     ) -> Question:
         """
-        Deterministic, high-quality fallback generator aligned to StrategyPlan, DecisionAction, and ExperienceLevel.
+        Deterministic, high-quality fallback generator aligned to StrategyPlan, ExperienceLevel, and Adaptive Decision.
         """
         role = config.role or "Software Engineer"
         topic = strategy.target_topic
         q_type = strategy.question_type
         exp = config.experience_level
         diff = strategy.difficulty
-        action = strategy.decision_action or (strategy.decision.action if strategy.decision else None)
 
-        # Customized fallback questions based on DecisionAction
-        if action == "FOLLOW_UP":
-            ref = strategy.context_reference or "the key mechanism"
-            text = f"Following up on your previous answer regarding {topic}, could you elaborate specifically on how you would address {ref} and handle potential concurrency or failure edge cases?"
-            concepts = [f"{topic} edge case handling", "Failure recovery", "Trade-off analysis"]
-            rubric = ["Precision of follow-up detail", "Technical accuracy", "Practical resilience"]
-        elif action == "DEEP_DIVE":
-            text = f"Let's dive deeper into {topic}. In a mission-critical, high-scale {role} environment, how does the internal memory model and execution runtime handle peak load without performance degradation?"
-            concepts = ["Memory management & GC/pointers", "Lock contention / asynchronous concurrency", "Low-level optimization"]
-            rubric = ["Architectural depth", "Internal execution comprehension", "Performance trade-offs"]
-        elif action == "CLARIFY":
-            text = f"To clarify your previous point on {topic}, could you clearly distinguish the underlying assumptions and trade-offs of your chosen implementation versus standard alternatives?"
-            concepts = ["Core trade-off justification", "Underlying assumptions", "Clear architectural reasoning"]
-            rubric = ["Clarity of thought", "Factual accuracy", "Structured communication"]
-        elif action == "REPHRASE":
-            text = f"To explore {topic} from another angle: suppose you are explaining this concept to a junior teammate with a practical real-world analogy. How would you describe what {topic} solves?"
-            concepts = [f"Foundational role of {topic}", "Core problem solved", "Intuitive real-world analogy"]
-            rubric = ["Conceptual clarity", "Simplicity and accuracy", "Communication effectiveness"]
-        elif action == "FINAL_QUESTION":
-            text = f"As our final question: looking back at our discussion across {topic} and system design, what is the single most critical architectural decision you would make for a {role} project, and why?"
-            concepts = ["Comprehensive system synthesis", "Strategic trade-off evaluation", "Executive engineering judgment"]
-            rubric = ["Holistic perspective", "Senior leadership judgment", "Clarity and impact"]
+        # Handle explicit decision actions for adaptive context
+        if decision and decision.action == DecisionAction.FINAL_QUESTION:
+            text = f"To wrap up our interview for the {role} position, looking across all the topics we explored (including {topic}), what core engineering principles and architectural standards guide your design and leadership decisions?"
+            concepts = ["Architectural vision", "Engineering principles", "Production reliability & trade-offs"]
+            rubric = ["Holistic synthesis", "Communication clarity", "Leadership perspective"]
+        elif decision and decision.action == DecisionAction.REPHRASE:
+            text = f"Let's look at {topic} from a foundational perspective: Can you walk through a simple, practical example of how {topic} works and when a {role} would choose to use it?"
+            concepts = [f"Basic {topic} workflow", "Practical use cases", "Core advantage"]
+            rubric = ["Fundamental grasp", "Clarity of basic explanation", "Practical relevance"]
+        elif decision and decision.action == DecisionAction.DEEP_DIVE:
+            text = f"Let's dive deeper into {topic}: In a high-throughput production environment for {role}, how would you handle internal concurrency bottlenecks, race conditions, and memory efficiency when optimizing {topic}?"
+            concepts = ["Low-level concurrency mechanisms", "Memory synchronization", "Throughput optimization under load"]
+            rubric = ["Technical depth", "Advanced diagnostic reasoning", "Edge case awareness"]
+        elif decision and decision.action == DecisionAction.FOLLOW_UP:
+            text = f"Following up on our discussion regarding {topic}, could you elaborate specifically on how you would address {decision.objective.lower()} in a live production deployment?"
+            concepts = [f"{topic} implementation details", "Edge case mitigation", "Production best practices"]
+            rubric = ["Specific coverage of gap", "Directness", "Practical depth"]
+        elif decision and decision.action == DecisionAction.CLARIFY:
+            text = f"To clarify and expand on your previous answer on {topic}, how would you specifically justify your technical choices and trade-offs regarding {strategy.objective.lower()}?"
+            concepts = ["Clarification of trade-offs", "Concrete implementation rationale", "Edge case handling"]
+            rubric = ["Precision of explanation", "Logical coherence", "Completeness"]
         elif q_type == QuestionType.CONCEPTUAL:
             text = f"Can you explain the foundational architecture, core principles, and internal execution model of {topic} in modern {role} systems?"
             concepts = [f"{topic} architecture", "Core execution lifecycle", "Key advantages and limitations"]
@@ -264,7 +270,6 @@ class QuestionGeneratorService:
                 concepts = ["Idiomatic coding standards", "Error handling & validation", "Unit and integration testing"]
                 rubric = ["Code quality awareness", "Defensive programming", "Practical comprehension"]
 
-
         return Question(
             question_number=question_number,
             text=text,
@@ -279,5 +284,6 @@ class QuestionGeneratorService:
                 "fallback": True,
                 "strategy_objective": strategy.objective,
                 "experience_tier": exp.value,
+                "decision_action": decision.action.value if decision else None,
             },
         )

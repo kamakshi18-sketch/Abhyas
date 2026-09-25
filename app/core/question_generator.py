@@ -11,6 +11,7 @@ from app.schemas.interview import (
     Question,
     Difficulty,
     QuestionEvaluationPair,
+    InterviewDecision,
 )
 class QuestionGenerator:
     """Core question generator delegating to QuestionGeneratorService."""
@@ -27,7 +28,6 @@ class QuestionGenerator:
     ) -> Difficulty:
         """
         Compute effective difficulty for the next question.
-        For Phase 3, if not adaptive, returns config.difficulty.
         """
         if config.difficulty != Difficulty.ADAPTIVE:
             return config.difficulty
@@ -49,7 +49,7 @@ class QuestionGenerator:
         question_number: int,
         previous_questions: Optional[List[Question]] = None,
         history: Optional[List[QuestionEvaluationPair]] = None,
-        strategy: Optional["StrategyPlan"] = None,
+        decision: Optional[InterviewDecision] = None,
     ) -> Question:
         """
         Generate a structured question by delegating to QuestionGeneratorService.
@@ -58,6 +58,6 @@ class QuestionGenerator:
             config=config,
             question_number=question_number,
             previous_questions=previous_questions,
-            strategy=strategy,
+            decision=decision,
         )
 

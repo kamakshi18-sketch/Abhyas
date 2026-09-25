@@ -44,7 +44,7 @@ class Interview(Base):
     __tablename__ = "interviews"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False, index=True)
     role = Column(String(100), nullable=False)
     experience_level = Column(String(50), nullable=False)
     interview_type = Column(String(50), nullable=False)
@@ -56,7 +56,7 @@ class Interview(Base):
     mode = Column(String(50), nullable=False, default="TEXT")
     topics_json = Column(Text, nullable=True)         # JSON-encoded list of topics
     config_json = Column(Text, nullable=True)         # Full serialized InterviewConfig
-    status = Column(String(50), default="CREATED", nullable=False)
+    status = Column(String(50), default="CREATED", nullable=False, index=True)
     overall_score = Column(Float, nullable=True)
     overall_feedback = Column(Text, nullable=True)
     strengths_summary = Column(Text, nullable=True)  # JSON-encoded list
@@ -81,7 +81,7 @@ class QuestionModel(Base):
     __tablename__ = "questions"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    interview_id = Column(Integer, ForeignKey("interviews.id"), nullable=False)
+    interview_id = Column(Integer, ForeignKey("interviews.id"), nullable=False, index=True)
     question_number = Column(Integer, nullable=False)
     question_text = Column(Text, nullable=False)
     category = Column(String(100), nullable=False)
@@ -109,7 +109,7 @@ class AnswerModel(Base):
     __tablename__ = "answers"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    question_id = Column(Integer, ForeignKey("questions.id"), nullable=False)
+    question_id = Column(Integer, ForeignKey("questions.id"), nullable=False, index=True)
     answer_text = Column(Text, nullable=False)
     submitted_at = Column(DateTime, default=utc_now, nullable=False)
 
@@ -128,7 +128,7 @@ class EvaluationModel(Base):
     __tablename__ = "evaluations"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    answer_id = Column(Integer, ForeignKey("answers.id"), nullable=False, unique=True)
+    answer_id = Column(Integer, ForeignKey("answers.id"), nullable=False, unique=True, index=True)
     score = Column(Float, nullable=False)
     relevance = Column(Integer, nullable=False, default=5)
     correctness = Column(Integer, nullable=False, default=5)

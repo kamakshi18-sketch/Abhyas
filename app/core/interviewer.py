@@ -1,8 +1,7 @@
 """
 Interview Engine.
-Stateful orchestration layer managing the complete adaptive interview lifecycle (Phase 5),
-coordinating Question Generation, Answer Evaluation, Interview State tracking,
-Decision Engine routing, and Database Persistence.
+Stateful orchestration layer managing the complete interview lifecycle,
+coordinating Question Generation, Answer Evaluation, and Database Persistence.
 """
 
 import logging
@@ -13,9 +12,6 @@ from app.database.database import get_db
 from app.database.repository import InterviewRepository
 from app.schemas.interview import (
     InterviewConfig,
-    InterviewState,
-    InterviewDecision,
-    DecisionAction,
     Question,
     CandidateAnswer,
     AnswerEvaluation,
@@ -23,35 +19,39 @@ from app.schemas.interview import (
     InterviewSummary,
     InterviewResult,
     InterviewStatus,
+    InterviewState,
+    InterviewDecision,
 )
 from app.core.question_generator import QuestionGenerator
 from app.core.evaluator import AnswerEvaluator
-from app.core.decision_engine import DecisionEngine
+from app.services.decision_service import DecisionService
 
 logger = logging.getLogger(__name__)
 
 
 class InterviewEngine:
-    """Stateful interview session coordinator with adaptive decision engine."""
+    """Stateful interview session coordinator with Phase 5 Adaptive Intelligence."""
 
     def __init__(
         self,
         llm_service: Optional[LLMService] = None,
         question_generator: Optional[QuestionGenerator] = None,
         evaluator: Optional[AnswerEvaluator] = None,
-        decision_engine: Optional[DecisionEngine] = None,
+        decision_service: Optional[DecisionService] = None,
     ):
         self.llm_service = llm_service or get_llm_service()
         self.question_generator = question_generator or QuestionGenerator(self.llm_service)
         self.evaluator = evaluator or AnswerEvaluator(self.llm_service)
-        self.decision_engine = decision_engine or DecisionEngine()
+        self.decision_service = decision_service or DecisionService(llm_service=self.llm_service)
 
         # Session State
         self.config: Optional[InterviewConfig] = None
-        self.state: Optional[InterviewState] = None
         self.interview_id: Optional[int] = None
         self.candidate_id: Optional[int] = None
         self.status: InterviewStatus = InterviewStatus.CREATED
+
+        self.state: Optional[InterviewState] = None
+        self.current_decision: Optional[InterviewDecision] = None
 
         self.current_question_number: int = 0
         self.current_question: Optional[Question] = None
@@ -77,13 +77,9 @@ class InterviewEngine:
             return False
         return self.current_question_number < self.config.num_questions
 
-    @property
-    def latest_decision(self) -> Optional[InterviewDecision]:
-        return self.state.latest_decision if self.state else None
-
     def start_interview(self, config: InterviewConfig) -> Question:
         """
-        Initialize the interview session, state snapshot, persist records to database,
+        Initialize the interview session, initialize adaptive state, persist records to database,
         and generate the first question.
         """
         self.config = config
@@ -93,8 +89,8 @@ class InterviewEngine:
         self.history = []
         self.final_summary = None
 
-        # Initialize Phase 5 Interview State
-        self.state = self.decision_engine.initialize_state(config)
+        # Initialize Phase 5 InterviewState
+        self.state = self.decision_service.initialize_state(config)
 
         # Persist Candidate and Interview in DB
         try:
@@ -114,11 +110,16 @@ class InterviewEngine:
         except Exception as e:
             logger.error(f"Database error during interview initiation: {e}")
 
+        # Determine initial adaptive decision
+        initial_decision = self.decision_service.decide_next_step(self.state, self.config)
+        self.current_decision = initial_decision
+
         # Generate first question
         question = self.question_generator.generate_question(
             config=self.config,
             question_number=1,
             previous_questions=[],
+            decision=initial_decision,
         )
         self.current_question = question
         self.previous_questions.append(question)
@@ -143,14 +144,10 @@ class InterviewEngine:
 
     def submit_answer(self, answer_text: str) -> AnswerEvaluation:
         """
-        Submit answer for current question:
-        1. Evaluates answer using type-specific rubric.
-        2. Updates live InterviewState (topics, strengths/weaknesses, score metrics).
-        3. Executes DecisionEngine to determine next adaptive strategic action.
-        4. Persists state and evaluation to database.
+        Submit answer for current question, evaluate it, update adaptive state, and persist to database.
         """
-        if not self.current_question or not self.config or not self.state:
-            raise ValueError("No active question or uninitialized interview state.")
+        if not self.current_question or not self.config:
+            raise ValueError("No active question to evaluate.")
 
         clean_text = answer_text.strip()
         answer = CandidateAnswer(
@@ -161,7 +158,7 @@ class InterviewEngine:
         )
         self.current_answer = answer
 
-        # 1. Evaluate Answer
+        # Evaluate Answer
         evaluation = self.evaluator.evaluate_answer(
             config=self.config,
             question=self.current_question,
@@ -169,25 +166,16 @@ class InterviewEngine:
         )
         self.current_evaluation = evaluation
 
-        # 2. Update InterviewState
-        self.decision_engine.update_state(
-            state=self.state,
-            question=self.current_question,
-            answer=answer,
-            evaluation=evaluation,
-            config=self.config,
-        )
+        # Update Phase 5 InterviewState
+        if self.state:
+            self.decision_service.record_interaction(
+                state=self.state,
+                question=self.current_question,
+                answer=answer,
+                evaluation=evaluation,
+            )
 
-        # 3. Execute DecisionEngine
-        decision = self.decision_engine.decide_next_action(
-            state=self.state,
-            config=self.config,
-            latest_evaluation=evaluation,
-        )
-        self.state.latest_decision = decision
-        self.state.difficulty = decision.target_difficulty
-
-        # 4. Save to DB
+        # Save to DB
         if self.current_question_db_id:
             try:
                 with get_db() as session:
@@ -212,11 +200,8 @@ class InterviewEngine:
 
     def generate_next_question(self) -> Optional[Question]:
         """
-        Advance to the next question in the adaptive interview sequence:
-        1. Checks question budget limits (prevents infinite loops).
-        2. Maps latest InterviewDecision to a StrategyPlan.
-        3. Generates targeted question via Question Generator.
-        4. Persists next question to database.
+        Advance to the next question in the interview sequence driven by Adaptive Decision Engine.
+        Returns None if all configured questions have been completed.
         """
         if not self.has_more_questions:
             return None
@@ -225,28 +210,18 @@ class InterviewEngine:
         self.current_answer = None
         self.current_evaluation = None
 
-        # Resolve StrategyPlan from DecisionEngine
-        decision = self.state.latest_decision if self.state else None
-        if not decision and self.state:
-            decision = self.decision_engine.decide_next_action(self.state, self.config)
-            self.state.latest_decision = decision
+        # Execute Adaptive Decision Engine (Phase 5)
+        decision = None
+        if self.state and self.config:
+            decision = self.decision_service.decide_next_step(self.state, self.config)
+            self.current_decision = decision
 
-        strategy = None
-        if decision and self.state and self.config:
-            strategy = self.decision_engine.map_decision_to_strategy(
-                decision=decision,
-                state=self.state,
-                config=self.config,
-                question_number=self.current_question_number,
-            )
-
-        # Generate Adaptive Question
         question = self.question_generator.generate_question(
             config=self.config,
             question_number=self.current_question_number,
             previous_questions=self.previous_questions,
             history=self.history,
-            strategy=strategy,
+            decision=decision,
         )
 
         self.current_question = question
@@ -310,4 +285,3 @@ class InterviewEngine:
         if not self.config or self.config.num_questions == 0:
             return 0.0
         return min(1.0, len(self.history) / float(self.config.num_questions))
-

@@ -45,13 +45,21 @@ class InterviewMode(str, Enum):
 
 
 class InterviewerPersona(str, Enum):
-    """Interviewer conversational persona and coaching tone."""
-    PROFESSIONAL = "Professional & Neutral"
-    EMPATHETIC = "Empathetic & Supportive"
-    STRICT = "Strict & Demanding"
-    FAANG_LEAD = "FAANG Hiring Manager"
-    STARTUP_FOUNDER = "Startup Founder"
-    FAST_PACED = "Fast-Paced Screener"
+    """Interviewer conversational personas supported in Phase 7."""
+    PROFESSIONAL = "Professional"
+    FRIENDLY = "Friendly"
+    CONVERSATIONAL = "Conversational"
+    TECHNICAL_EXPERT = "Technical Expert"
+    STRICT = "Strict"
+    STARTUP = "Startup"
+    HR = "HR"
+    SENIOR_ENGINEER = "Senior Engineer"
+
+    # Backward compatibility aliases for Phase 2–6
+    EMPATHETIC = "Friendly"
+    FAANG_LEAD = "Senior Engineer"
+    STARTUP_FOUNDER = "Startup"
+    FAST_PACED = "Startup"
 
 
 class InterviewStatus(str, Enum):
@@ -60,6 +68,19 @@ class InterviewStatus(str, Enum):
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
+
+
+class DecisionAction(str, Enum):
+    """Decision actions supported by the Adaptive Decision Engine (Phase 5)."""
+    FOLLOW_UP = "FOLLOW_UP"
+    DEEP_DIVE = "DEEP_DIVE"
+    CLARIFY = "CLARIFY"
+    NEW_TOPIC = "NEW_TOPIC"
+    INCREASE_DIFFICULTY = "INCREASE_DIFFICULTY"
+    DECREASE_DIFFICULTY = "DECREASE_DIFFICULTY"
+    REPHRASE = "REPHRASE"
+    MOVE_ON = "MOVE_ON"
+    FINAL_QUESTION = "FINAL_QUESTION"
 
 
 class InterviewConfig(BaseModel):
@@ -75,6 +96,31 @@ class InterviewConfig(BaseModel):
     interviewer_persona: InterviewerPersona = Field(default=InterviewerPersona.PROFESSIONAL)
     topics: List[str] = Field(default_factory=list, description="Selected technical or behavioral focus topics")
     mode: InterviewMode = Field(default=InterviewMode.TEXT, description="Active delivery mode")
+
+    @field_validator("interviewer_persona", mode="before")
+    @classmethod
+    def normalize_persona(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            val_clean = v.strip()
+            alias_map = {
+                "Professional & Neutral": InterviewerPersona.PROFESSIONAL,
+                "Professional": InterviewerPersona.PROFESSIONAL,
+                "Empathetic & Supportive": InterviewerPersona.FRIENDLY,
+                "Friendly": InterviewerPersona.FRIENDLY,
+                "Conversational": InterviewerPersona.CONVERSATIONAL,
+                "Technical Expert": InterviewerPersona.TECHNICAL_EXPERT,
+                "Strict & Demanding": InterviewerPersona.STRICT,
+                "Strict": InterviewerPersona.STRICT,
+                "Startup Founder": InterviewerPersona.STARTUP,
+                "Startup": InterviewerPersona.STARTUP,
+                "HR": InterviewerPersona.HR,
+                "FAANG Hiring Manager": InterviewerPersona.SENIOR_ENGINEER,
+                "Senior Engineer": InterviewerPersona.SENIOR_ENGINEER,
+                "Fast-Paced Screener": InterviewerPersona.STARTUP,
+            }
+            if val_clean in alias_map:
+                return alias_map[val_clean]
+        return v
 
     @field_validator("candidate_name")
     @classmethod
@@ -114,29 +160,6 @@ class InterviewConfig(BaseModel):
         return self
 
 
-class DecisionAction(str, Enum):
-    """Adaptive interview engine branching and difficulty actions."""
-    FOLLOW_UP = "FOLLOW_UP"
-    DEEP_DIVE = "DEEP_DIVE"
-    CLARIFY = "CLARIFY"
-    NEW_TOPIC = "NEW_TOPIC"
-    INCREASE_DIFFICULTY = "INCREASE_DIFFICULTY"
-    DECREASE_DIFFICULTY = "DECREASE_DIFFICULTY"
-    REPHRASE = "REPHRASE"
-    MOVE_ON = "MOVE_ON"
-    FINAL_QUESTION = "FINAL_QUESTION"
-
-
-class InterviewDecision(BaseModel):
-    """Decision produced by the Decision Engine controlling next question strategy."""
-    action: DecisionAction = Field(..., description="Strategic adaptive action to take")
-    reason: str = Field(..., description="Justification explaining why this action was selected")
-    target_topic: Optional[str] = Field(default=None, description="Topic for the next question")
-    target_difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Calibrated difficulty level")
-    objective: str = Field(..., description="Specific assessment objective for next question")
-    context_reference: Optional[str] = Field(default=None, description="Optional quote or concept reference from previous answer")
-
-
 class QuestionType(str, Enum):
     """Specific pedagogical and evaluative style of an interview question."""
     TECHNICAL = "Technical"
@@ -149,6 +172,30 @@ class QuestionType(str, Enum):
     ROLE_SPECIFIC = "Role Specific"
 
 
+class FollowUpType(str, Enum):
+    """Categorization of specialized follow-up questions (Phase 6)."""
+    CLARIFICATION = "Clarification"
+    EXAMPLE_REQUEST = "Example request"
+    WHY_QUESTION = "Why question"
+    HOW_QUESTION = "How question"
+    DEEP_TECHNICAL = "Deep technical question"
+    TRADEOFF = "Tradeoff question"
+    CHALLENGE = "Challenge question"
+    COUNTEREXAMPLE = "Counterexample"
+    OPTIMIZATION = "Optimization question"
+    PROJECT_SPECIFIC = "Project-specific follow-up"
+
+
+class FollowUpPlan(BaseModel):
+    """Pedagogical blueprint for generating a contextual follow-up question (Phase 6)."""
+    follow_up_type: FollowUpType = Field(..., description="Targeted follow-up category")
+    anchor_concept_or_quote: str = Field(..., description="Excerpt or concept from candidate's answer being anchored")
+    target_topic: str = Field(..., description="Active focus topic")
+    difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Calibrated difficulty tier")
+    objective: str = Field(..., description="Assessment objective for the follow-up probe")
+    rationale: str = Field(default="", description="Why this follow-up type was chosen")
+
+
 class StrategyPlan(BaseModel):
     """Strategic blueprint for generating a specific question in the interview sequence."""
     question_number: int = Field(..., ge=1, description="Question number in the sequence")
@@ -157,10 +204,6 @@ class StrategyPlan(BaseModel):
     category: str = Field(default="Technical", description="Broad category")
     difficulty: Difficulty = Field(default=Difficulty.MEDIUM)
     objective: str = Field(..., description="Assessment objective and pedagogical focus")
-    decision: Optional[InterviewDecision] = Field(default=None, description="Adaptive decision driving this strategy step")
-    decision_action: Optional[DecisionAction] = Field(default=None, description="Direct action shortcut")
-    context_reference: Optional[str] = Field(default=None, description="Contextual excerpt from previous response")
-
 
 
 class Question(BaseModel):
@@ -178,6 +221,10 @@ class Question(BaseModel):
     expected_points: Optional[List[str]] = Field(default=None, description="Alias for expected_concepts")
     evaluation_criteria: List[str] = Field(default_factory=list, description="Rubric criteria used by evaluator")
     follow_up_possible: bool = Field(default=True, description="Whether this question can be branched with follow-up")
+    is_follow_up: bool = Field(default=False, description="Whether this question is an adaptive follow-up")
+    follow_up_type: Optional[FollowUpType] = Field(default=None, description="Category of follow-up if applicable")
+    parent_question_id: Optional[int] = Field(default=None, description="Parent question ID being followed up")
+    anchor_reference: Optional[str] = Field(default=None, description="Excerpt or concept from candidate answer being referenced")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Extensible telemetry or strategy parameters")
 
     @model_validator(mode="before")
@@ -409,20 +456,103 @@ class InterviewResult(BaseModel):
     completed_at: Optional[str] = None
 
 
+class InterviewDecision(BaseModel):
+    """Next action decided by the Adaptive Decision Engine (Phase 5)."""
+    action: DecisionAction = Field(..., description="The next pedagogical action to take")
+    reason: str = Field(..., description="Pedagogical rationale explaining why this action was selected")
+    target_topic: str = Field(..., description="Target topic for the next question")
+    target_difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Target difficulty for the next question")
+    objective: str = Field(..., description="Assessment objective for the question generator")
+    suggested_question_type: Optional[QuestionType] = Field(default=None, description="Suggested question style/type")
+    parent_question_id: Optional[int] = Field(default=None, description="ID of question being followed up or clarified")
+    context_note: Optional[str] = Field(default=None, description="Additional context or scaffolding for prompt generation")
+
+
 class InterviewState(BaseModel):
-    """Live state snapshot of the active interview session."""
-    current_topic: Optional[str] = Field(default=None, description="Current topic being evaluated")
-    topics_covered: List[str] = Field(default_factory=list, description="List of topics evaluated so far")
-    topics_remaining: List[str] = Field(default_factory=list, description="List of topics not yet evaluated")
-    strengths: List[str] = Field(default_factory=list, description="Aggregated strengths identified across session")
-    weaknesses: List[str] = Field(default_factory=list, description="Aggregated areas needing improvement")
+    """Comprehensive state tracking model for the active interview session (Phase 5)."""
+    current_topic: str = Field(default="General", description="Currently active focus topic")
+    topics_covered: List[str] = Field(default_factory=list, description="Topics that have been assessed")
+    topics_remaining: List[str] = Field(default_factory=list, description="Topics yet to be explored")
+    strengths: List[str] = Field(default_factory=list, description="Accumulated candidate strengths across all evaluations")
+    weaknesses: List[str] = Field(default_factory=list, description="Accumulated areas of weakness or omissions")
     previous_questions: List[Question] = Field(default_factory=list, description="All questions asked so far")
-    previous_answers: List[CandidateAnswer] = Field(default_factory=list, description="All candidate answers submitted so far")
-    previous_evaluations: List[AnswerEvaluation] = Field(default_factory=list, description="All answer evaluations so far")
-    difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Current calibrated difficulty")
-    question_count: int = Field(default=0, ge=0, description="Total number of questions answered")
-    interview_progress: float = Field(default=0.0, ge=0.0, le=1.0, description="Session progress ratio (0.0 to 1.0)")
-    consecutive_high_scores: int = Field(default=0, ge=0, description="Consecutive scores >= 7.5")
-    consecutive_low_scores: int = Field(default=0, ge=0, description="Consecutive scores <= 4.5")
-    latest_decision: Optional[InterviewDecision] = Field(default=None, description="Most recent decision from the Decision Engine")
+    previous_answers: List[CandidateAnswer] = Field(default_factory=list, description="All candidate answers submitted")
+    previous_evaluations: List[AnswerEvaluation] = Field(default_factory=list, description="All evaluations generated")
+    difficulty: Difficulty = Field(default=Difficulty.MEDIUM, description="Current effective difficulty level")
+    question_count: int = Field(default=0, ge=0, description="Number of questions completed so far")
+    interview_progress: float = Field(default=0.0, ge=0.0, le=1.0, description="Progress ratio from 0.0 to 1.0")
+    max_questions: int = Field(default=5, ge=1, description="Total planned question budget")
+    consecutive_high_scores: int = Field(default=0, ge=0, description="Streak of high-scoring answers (>= 8.0)")
+    consecutive_low_scores: int = Field(default=0, ge=0, description="Streak of low-scoring answers (< 5.0)")
+    topic_question_counts: Dict[str, int] = Field(default_factory=dict, description="Count of questions asked per topic")
+
+    @property
+    def average_score(self) -> float:
+        """Calculate the average score across all evaluations so far."""
+        if not self.previous_evaluations:
+            return 0.0
+        return round(sum(e.score for e in self.previous_evaluations) / len(self.previous_evaluations), 2)
+
+    @property
+    def latest_score(self) -> Optional[float]:
+        """Return the score from the most recent evaluation, or None."""
+        if self.previous_evaluations:
+            return self.previous_evaluations[-1].score
+        return None
+
+    @property
+    def latest_evaluation(self) -> Optional[AnswerEvaluation]:
+        """Return the most recent AnswerEvaluation or None."""
+        return self.previous_evaluations[-1] if self.previous_evaluations else None
+
+    @property
+    def latest_question(self) -> Optional[Question]:
+        """Return the most recent Question or None."""
+        return self.previous_questions[-1] if self.previous_questions else None
+
+    @property
+    def latest_answer(self) -> Optional[CandidateAnswer]:
+        """Return the most recent CandidateAnswer or None."""
+        return self.previous_answers[-1] if self.previous_answers else None
+
+    def update(
+        self,
+        question: Question,
+        answer: CandidateAnswer,
+        evaluation: AnswerEvaluation,
+    ) -> None:
+        """Update interview state deterministically upon receiving a question, answer, and evaluation."""
+        self.previous_questions.append(question)
+        self.previous_answers.append(answer)
+        self.previous_evaluations.append(evaluation)
+        self.question_count = len(self.previous_questions)
+        self.interview_progress = min(1.0, round(self.question_count / float(self.max_questions), 2))
+
+        # Update topic tracking
+        topic = question.topic or self.current_topic
+        self.current_topic = topic
+        self.topic_question_counts[topic] = self.topic_question_counts.get(topic, 0) + 1
+        if topic not in self.topics_covered:
+            self.topics_covered.append(topic)
+        if topic in self.topics_remaining:
+            self.topics_remaining.remove(topic)
+
+        # Accumulate strengths and weaknesses (deduplicating)
+        for s in evaluation.strengths:
+            if s and s not in self.strengths:
+                self.strengths.append(s)
+        for w in evaluation.weaknesses:
+            if w and w not in self.weaknesses:
+                self.weaknesses.append(w)
+
+        # Update score streaks
+        if evaluation.score >= 8.0:
+            self.consecutive_high_scores += 1
+            self.consecutive_low_scores = 0
+        elif evaluation.score < 5.0:
+            self.consecutive_low_scores += 1
+            self.consecutive_high_scores = 0
+        else:
+            self.consecutive_high_scores = 0
+            self.consecutive_low_scores = 0
 

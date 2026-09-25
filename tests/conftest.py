@@ -20,6 +20,8 @@ from app.schemas.interview import (
     EvaluationMetrics,
     AnswerEvaluation,
     InterviewSummary,
+    DecisionAction,
+    InterviewDecision,
 )
 
 T = TypeVar("T", bound=BaseModel)
@@ -96,6 +98,16 @@ class MockLLMService(LLMService):
             )
             self.generated_summaries.append(summ)
             return summ  # type: ignore
+
+        elif schema == InterviewDecision:
+            dec = InterviewDecision(
+                action=DecisionAction.FOLLOW_UP,
+                reason="Probing missing concurrency edge case.",
+                target_topic="Python",
+                target_difficulty=Difficulty.HARD,
+                objective="Evaluate concurrency internals.",
+            )
+            return dec  # type: ignore
 
         raise ValueError(f"Unsupported schema in MockLLMService: {schema}")
 

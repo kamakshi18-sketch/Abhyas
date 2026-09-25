@@ -1,6 +1,7 @@
 """
 NVIDIA Nemotron (NVIDIA NIM) API LLM Service implementation.
 Provides structured generation, text generation, and health checks via OpenAI-compatible NIM endpoints.
+Optimized with persistent connection pooling and instrumentation.
 """
 
 import json
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config.settings import get_settings
 from app.ai.ollama_client import LLMService, LLMConnectionError, LLMValidationError
+from app.performance.timers import Timer
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,26 @@ class NvidiaService(LLMService):
         self.timeout = timeout or settings.llm_timeout_seconds
         self.default_temperature = settings.llm_temperature
         self.max_retries = settings.max_llm_retries
+        self._client: Optional[httpx.Client] = None
         logger.info(f"Initialized NvidiaService with model='{self.model}' at '{self.base_url}'")
+
+    def _get_client(self) -> httpx.Client:
+        """Get or lazily initialize reusable httpx.Client with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client(
+                timeout=httpx.Timeout(self.timeout, connect=5.0),
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
+        return self._client
+
+    def close(self) -> None:
+        """Close underlying HTTP client if open."""
+        if self._client is not None and not self._client.is_closed:
+            self._client.close()
+            self._client = None
+
+    def __del__(self):
+        self.close()
 
     def set_model(self, model_name: str) -> None:
         """Dynamically switch NVIDIA Nemotron model."""
@@ -54,14 +75,14 @@ class NvidiaService(LLMService):
         url = f"{self.base_url}/models"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         try:
-            with httpx.Client(timeout=10.0) as client:
-                resp = client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    return True, f"NVIDIA NIM is connected ({self.model} ready)."
-                elif resp.status_code == 401 or resp.status_code == 403:
-                    return False, "NVIDIA API authentication failed: Invalid or expired API key."
-                else:
-                    return False, f"NVIDIA API returned status {resp.status_code}: {resp.text[:150]}"
+            client = self._get_client()
+            resp = client.get(url, headers=headers, timeout=10.0)
+            if resp.status_code == 200:
+                return True, f"NVIDIA NIM is connected ({self.model} ready)."
+            elif resp.status_code == 401 or resp.status_code == 403:
+                return False, "NVIDIA API authentication failed: Invalid or expired API key."
+            else:
+                return False, f"NVIDIA API returned status {resp.status_code}: {resp.text[:150]}"
         except Exception as e:
             return False, f"Cannot reach NVIDIA NIM endpoint: {str(e)}"
 
@@ -121,18 +142,19 @@ class NvidiaService(LLMService):
             "response_format": {"type": "json_object"},
         }
 
+        client = self._get_client()
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    if resp.status_code != 200:
-                        raise LLMConnectionError(f"NVIDIA API error ({resp.status_code}): {resp.text}")
+                with Timer("nvidia_structured_request"):
+                    resp = client.post(url, headers=headers, json=payload, timeout=self.timeout)
+                if resp.status_code != 200:
+                    raise LLMConnectionError(f"NVIDIA API error ({resp.status_code}): {resp.text}")
 
-                    data = resp.json()
-                    raw_text = data["choices"][0]["message"]["content"].strip()
-                    cleaned_json = self._extract_json_string(raw_text)
-                    return schema.model_validate_json(cleaned_json)
+                data = resp.json()
+                raw_text = data["choices"][0]["message"]["content"].strip()
+                cleaned_json = self._extract_json_string(raw_text)
+                return schema.model_validate_json(cleaned_json)
 
             except (json.JSONDecodeError, ValidationError) as e:
                 last_error = e
@@ -153,7 +175,7 @@ class NvidiaService(LLMService):
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
     ) -> str:
-        """Multi-turn chat interaction with NVIDIA NIM."""
+        """Chat interaction via NVIDIA NIM OpenAI-compatible endpoint."""
         if not self.api_key:
             raise LLMConnectionError("NVIDIA API key is not configured.")
 
@@ -171,12 +193,13 @@ class NvidiaService(LLMService):
         }
 
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.post(url, headers=headers, json=payload)
-                if resp.status_code != 200:
-                    raise LLMConnectionError(f"NVIDIA API error ({resp.status_code}): {resp.text}")
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+            client = self._get_client()
+            with Timer("nvidia_chat_request"):
+                resp = client.post(url, headers=headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                raise LLMConnectionError(f"NVIDIA API error ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
         except Exception as e:
             logger.error(f"NVIDIA chat error: {e}")
             raise LLMConnectionError(f"NVIDIA chat failed: {e}") from e

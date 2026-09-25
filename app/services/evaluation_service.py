@@ -26,9 +26,12 @@ from app.core.evaluation_rubrics import EvaluationRubricService, EvaluationRubri
 from app.core.prompts import (
     ANSWER_EVALUATOR_SYSTEM_PROMPT,
     SUMMARY_GENERATOR_SYSTEM_PROMPT,
+    EVALUATION_PROMPT_VERSION,
     build_evaluation_prompt,
     build_summary_prompt,
 )
+from app.performance.timers import Timer
+from app.performance.cache import get_evaluation_cache, EvaluationCache
 
 logger = logging.getLogger(__name__)
 
@@ -107,73 +110,95 @@ class AnswerEvaluationService:
     ) -> AnswerEvaluation:
         """
         Evaluate candidate response against question, expected concepts, and type-specific rubric.
+        Optimized with deterministic LRU caching and quality validation.
         """
-        clean_text = candidate_answer.strip()
+        with Timer("evaluation_pipeline"):
+            clean_text = candidate_answer.strip()
 
-        # 1. Resolve Type-Specific Rubric
-        rubric = self.rubric_service.get_rubric(
-            interview_type=config.interview_type,
-            question_type=question.question_type,
-        )
+            # 1. Resolve Type-Specific Rubric
+            rubric = self.rubric_service.get_rubric(
+                interview_type=config.interview_type,
+                question_type=question.question_type,
+            )
 
-        # 2. Short-Circuit: Empty or Whitespace-Only Answer
-        if not clean_text or clean_text == "(No answer provided)":
-            return self._generate_empty_answer_evaluation(rubric)
+            # 2. Short-Circuit: Empty or Whitespace-Only Answer
+            if not clean_text or clean_text == "(No answer provided)":
+                return self._generate_empty_answer_evaluation(rubric)
 
-        # 3. Short-Circuit: Refusal or Non-Answer (e.g. "I don't know", "skip", "no idea")
-        if self._is_refusal_answer(clean_text):
-            return self._generate_refusal_evaluation(clean_text, question, rubric)
+            # 3. Short-Circuit: Refusal or Non-Answer (e.g. "I don't know", "skip", "no idea")
+            if self._is_refusal_answer(clean_text):
+                return self._generate_refusal_evaluation(clean_text, question, rubric)
 
-        # 4. Build Prompt
-        rubric_instructions = self.rubric_service.format_rubric_prompt_instructions(rubric)
-        prompt = build_evaluation_prompt(
-            config=config,
-            question=question,
-            candidate_answer=clean_text,
-            rubric_instructions=rubric_instructions,
-        )
+            # 4. Check Safe Deterministic Evaluation Cache
+            eval_cache = get_evaluation_cache()
+            model_name = getattr(self.llm_service, "model", "default")
+            cache_key = eval_cache.generate_key(
+                question_text=question.text or question.question_text or "",
+                candidate_answer=clean_text,
+                rubric_type=rubric.category_name,
+                persona=config.interviewer_persona.value,
+                language=config.language,
+                model=model_name,
+                prompt_version=EVALUATION_PROMPT_VERSION,
+            )
+            cached_eval = eval_cache.get(cache_key)
+            if cached_eval is not None:
+                logger.info(f"Evaluation cache HIT for Q{question.question_number} (score: {cached_eval.score}/10)")
+                return cached_eval
 
-        # 5. LLM Structured Generation Loop with Validation & Retry
-        last_error = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                evaluation = self.llm_service.generate_structured(
-                    prompt=prompt,
-                    schema=AnswerEvaluation,
-                    system=ANSWER_EVALUATOR_SYSTEM_PROMPT,
-                )
+            # 5. Build Prompt
+            rubric_instructions = self.rubric_service.format_rubric_prompt_instructions(rubric)
+            prompt = build_evaluation_prompt(
+                config=config,
+                question=question,
+                candidate_answer=clean_text,
+                rubric_instructions=rubric_instructions,
+            )
 
-                # Ensure criteria completeness
-                self._ensure_rubric_criteria_present(evaluation, rubric)
-
-                # Validate quality
-                is_valid, reason = self.validator.validate(
-                    evaluation=evaluation,
-                    rubric=rubric,
-                    candidate_answer=clean_text,
-                )
-
-                if is_valid:
-                    # Guarantee disclaimer is populated
-                    if not evaluation.assessment_disclaimer:
-                        evaluation.assessment_disclaimer = DEFAULT_ASSESSMENT_DISCLAIMER
-                    logger.info(
-                        f"Evaluated Q{question.question_number} answer with score {evaluation.score}/10 on attempt {attempt + 1}"
+            # 6. LLM Structured Generation Loop with Validation & Retry
+            last_error = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    evaluation = self.llm_service.generate_structured(
+                        prompt=prompt,
+                        schema=AnswerEvaluation,
+                        system=ANSWER_EVALUATOR_SYSTEM_PROMPT,
                     )
-                    return evaluation
-                else:
-                    logger.warning(f"Evaluation validation failed (Attempt {attempt + 1}): {reason}")
-                    last_error = reason
-                    prompt += f"\n\nCRITICAL FIX: Previous output failed validation: {reason}. Output strict JSON adhering to schema."
 
-            except (LLMValidationError, LLMConnectionError, ValidationError, Exception) as e:
-                logger.warning(f"Error during structured evaluation on attempt {attempt + 1}: {e}")
-                last_error = str(e)
-                prompt += "\n\nJSON Error: Ensure valid JSON with numeric scores (0.0-10.0) and criteria breakdown."
+                    # Ensure criteria completeness
+                    self._ensure_rubric_criteria_present(evaluation, rubric)
 
-        # 6. Fallback Grounded Heuristic Evaluation
-        logger.error(f"LLM evaluation failed after {self.max_retries + 1} attempts ({last_error}). Using deterministic fallback.")
-        return self._generate_fallback_evaluation(config, question, clean_text, rubric)
+                    # Validate quality
+                    is_valid, reason = self.validator.validate(
+                        evaluation=evaluation,
+                        rubric=rubric,
+                        candidate_answer=clean_text,
+                    )
+
+                    if is_valid:
+                        # Guarantee disclaimer is populated
+                        if not evaluation.assessment_disclaimer:
+                            evaluation.assessment_disclaimer = DEFAULT_ASSESSMENT_DISCLAIMER
+                        logger.info(
+                            f"Evaluated Q{question.question_number} answer with score {evaluation.score}/10 on attempt {attempt + 1}"
+                        )
+                        eval_cache.put(cache_key, evaluation)
+                        return evaluation
+                    else:
+                        logger.warning(f"Evaluation validation failed (Attempt {attempt + 1}): {reason}")
+                        last_error = reason
+                        prompt += f"\n\nCRITICAL FIX: Previous output failed validation: {reason}. Output strict JSON adhering to schema."
+
+                except (LLMValidationError, LLMConnectionError, ValidationError, Exception) as e:
+                    logger.warning(f"Error during structured evaluation on attempt {attempt + 1}: {e}")
+                    last_error = str(e)
+                    prompt += "\n\nJSON Error: Ensure valid JSON with numeric scores (0.0-10.0) and criteria breakdown."
+
+            # 7. Fallback Grounded Heuristic Evaluation
+            logger.error(f"LLM evaluation failed after {self.max_retries + 1} attempts ({last_error}). Using deterministic fallback.")
+            fallback_eval = self._generate_fallback_evaluation(config, question, clean_text, rubric)
+            eval_cache.put(cache_key, fallback_eval)
+            return fallback_eval
 
     def generate_summary(
         self,

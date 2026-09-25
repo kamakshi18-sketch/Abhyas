@@ -9,6 +9,9 @@ from app.schemas.interview import (
     InterviewMode,
     InterviewerPersona,
     InterviewStatus,
+    DecisionAction,
+    FollowUpType,
+    FollowUpPlan,
     InterviewConfig,
     QuestionType,
     StrategyPlan,
@@ -23,7 +26,10 @@ from app.schemas.interview import (
     InterviewSummary,
     InterviewResult,
     DEFAULT_ASSESSMENT_DISCLAIMER,
+    InterviewDecision,
+    InterviewState,
 )
+from app.schemas.persona import PersonaConfig
 
 __all__ = [
     "InterviewType",
@@ -31,7 +37,11 @@ __all__ = [
     "Difficulty",
     "InterviewMode",
     "InterviewerPersona",
+    "PersonaConfig",
     "InterviewStatus",
+    "DecisionAction",
+    "FollowUpType",
+    "FollowUpPlan",
     "InterviewConfig",
     "QuestionType",
     "StrategyPlan",
@@ -46,4 +56,7 @@ __all__ = [
     "InterviewSummary",
     "InterviewResult",
     "DEFAULT_ASSESSMENT_DISCLAIMER",
+    "InterviewDecision",
+    "InterviewState",
 ]
+

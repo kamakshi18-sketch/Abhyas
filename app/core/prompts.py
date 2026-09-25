@@ -4,7 +4,23 @@ Phase 2: Incorporates Topics, Personas, Multilingual, and Adaptive Difficulty di
 """
 
 from typing import List, Optional
-from app.schemas.interview import InterviewConfig, Question, QuestionEvaluationPair, Difficulty
+from app.schemas.interview import (
+    InterviewConfig,
+    Question,
+    QuestionEvaluationPair,
+    Difficulty,
+    StrategyPlan,
+    InterviewDecision,
+    FollowUpType,
+    FollowUpPlan,
+)
+from app.services.persona_service import PersonaService
+
+# Prompt Versions for Deterministic Caching and Invalidation
+QUESTION_PROMPT_VERSION = "2.0"
+EVALUATION_PROMPT_VERSION = "2.0"
+SUMMARY_PROMPT_VERSION = "2.0"
+FOLLOW_UP_PROMPT_VERSION = "2.0"
 
 # System Prompts
 QUESTION_GENERATOR_SYSTEM_PROMPT = """You are Abhyas, an expert hiring manager and AI interviewer conducting a personalized, highly effective mock interview.
@@ -17,7 +33,21 @@ Rules:
 4. Ensure questions test practical knowledge, architectural reasoning, or structured behavioral methods (STAR).
 5. Provide expected key concepts/points for ideal evaluation.
 6. Do NOT repeat or overlap with previously asked questions in the session.
-7. You MUST return your response as a valid JSON object matching the requested schema.
+7. If an adaptive decision action (such as FOLLOW_UP, DEEP_DIVE, CLARIFY, REPHRASE) is specified, tailor the question directly to that action.
+8. You MUST return your response as a valid JSON object matching the requested schema.
+"""
+
+FOLLOW_UP_GENERATOR_SYSTEM_PROMPT = """You are Abhyas, an expert technical interviewer specializing in contextual, conversational follow-up questions (Phase 6).
+Your responsibility is to formulate natural, pointed follow-up questions grounded directly in the candidate's previous response.
+
+Rules:
+1. Ground the follow-up question by directly quoting or referencing key phrases, choices, or technologies mentioned in the candidate's answer.
+2. Adhere strictly to the requested Follow-Up Type (e.g. Clarification, Example request, Why question, How question, Deep technical question, Tradeoff question, Challenge question, Counterexample, Optimization question, Project-specific follow-up).
+3. Do NOT repeat what the candidate already fully explained. Probe missing edge cases, trade-offs, internal mechanisms, or practical experience.
+4. Calibrate question complexity precisely to the candidate's experience tier and difficulty level.
+5. Provide clear expected concepts and evaluation criteria for assessing the follow-up answer.
+6. Maintain the requested Interviewer Persona communication style.
+7. You MUST return your response as a valid JSON object matching the requested Question schema.
 """
 
 ANSWER_EVALUATOR_SYSTEM_PROMPT = """You are Abhyas, an expert interview evaluator and career mentor conducting structured, evidence-based assessment.
@@ -31,11 +61,12 @@ Rules:
    - State whether the evidence demonstrates strength (is_positive: true) or an omission/flaw (is_positive: false).
 3. Identify 1 to 3 concrete candidate strengths and 1 to 3 specific areas of omission or weakness.
 4. Provide constructive feedback matching the requested Interviewer Persona tone.
-5. Provide actionable, specific suggestions on what would make this an exceptional response.
-6. Calculate an overall score from 0.0 to 10.0 reflecting the weighted criteria performance.
-7. Include the standard assessment disclaimer noting that AI evaluations are subjective pedagogical coaching feedback.
-8. If the interview language is non-English, provide the feedback and commentary in that language.
-9. You MUST return your response as a valid JSON object matching the requested schema.
+5. CRITICAL FAIRNESS INVARIANT: The Persona influences ONLY the phrasing and tone of the narrative commentary and suggestions. Scoring marks, correctness standards, and criteria weights MUST remain completely objective, fair, and identical across all personas.
+6. Provide actionable, specific suggestions on what would make this an exceptional response.
+7. Calculate an overall score from 0.0 to 10.0 reflecting the weighted criteria performance.
+8. Include the standard assessment disclaimer noting that AI evaluations are subjective pedagogical coaching feedback.
+9. If the interview language is non-English, provide the feedback and commentary in that language.
+10. You MUST return your response as a valid JSON object matching the requested schema.
 """
 
 SUMMARY_GENERATOR_SYSTEM_PROMPT = """You are Abhyas, a senior hiring panel lead compiling a holistic interview assessment summary.
@@ -44,10 +75,11 @@ Your task is to synthesize the candidate's overall performance across all interv
 Rules:
 1. Aggregate the candidate's performance across all evaluated criteria and questions.
 2. Compute an overall session score (0.0 to 10.0) and criteria averages.
-3. Highlight top observed strengths and notable skill gaps with constructive narrative feedback.
+3. Highlight top observed strengths and notable skill gaps with constructive narrative feedback formatted in the Interviewer Persona tone.
 4. List key actionable recommendations and topics for the candidate to study or practice.
 5. Emphasize that this summary is a coaching assessment designed for practice and growth.
-6. You MUST return your response as a valid JSON object matching the requested schema.
+6. Scoring and evaluation metrics must remain 100% objective and unaffected by persona style.
+7. You MUST return your response as a valid JSON object matching the requested schema.
 """
 
 
@@ -57,8 +89,9 @@ def build_question_prompt(
     previous_questions: List[Question],
     effective_difficulty: Optional[Difficulty] = None,
     strategy: Optional["StrategyPlan"] = None,
+    decision: Optional["InterviewDecision"] = None,
 ) -> str:
-    """Build user prompt for generating the next interview question adhering to the strategy plan and adaptive decision."""
+    """Build user prompt for generating the next interview question adhering to the strategy plan, adaptive decision, and persona."""
     prev_q_texts = (
         "\n".join([f"- Q{q.question_number} [{q.question_type.value if hasattr(q, 'question_type') else 'Technical'} | {q.topic}]: {q.text or q.question_text}" for q in previous_questions])
         if previous_questions
@@ -66,21 +99,22 @@ def build_question_prompt(
     )
 
     diff = effective_difficulty or (strategy.difficulty if strategy else (config.difficulty if config.difficulty != Difficulty.ADAPTIVE else Difficulty.MEDIUM))
-    target_topic = strategy.target_topic if strategy else (config.topics[0] if config.topics else config.role or "Software Engineering")
-    q_type_str = strategy.question_type.value if strategy else "Technical"
-    objective_str = strategy.objective if strategy else f"Assess candidate competency on {target_topic}."
+    target_topic = (decision.target_topic if decision else None) or (strategy.target_topic if strategy else (config.topics[0] if config.topics else config.role or "Software Engineering"))
+    q_type_str = (decision.suggested_question_type.value if decision and decision.suggested_question_type else None) or (strategy.question_type.value if strategy else "Technical")
+    objective_str = (decision.objective if decision else None) or (strategy.objective if strategy else f"Assess candidate competency on {target_topic}.")
 
-    # Adaptive Directive Section
-    decision_section = ""
-    if strategy and strategy.decision:
-        dec = strategy.decision
-        decision_section = f"""
-ADAPTIVE DECISION DIRECTIVE: [{dec.action.value}]
-Decision Justification: {dec.reason}
-Assessment Focus: {dec.objective}
+    adaptive_block = ""
+    if decision:
+        adaptive_block = f"""
+Adaptive Interview Decision Context:
+- Action: {decision.action.value}
+- Decision Rationale: {decision.reason}
+- Target Topic: {decision.target_topic}
+- Targeted Pedagogical Objective: {decision.objective}
+{f"- Additional Context: {decision.context_note}" if decision.context_note else ""}
 """
-        if dec.context_reference:
-            decision_section += f"Previous Response Context / Target Gap: \"{dec.context_reference}\"\n"
+
+    persona_block = PersonaService.format_persona_prompt_directive(config.interviewer_persona)
 
     return f"""Target Role: {config.role}
 Experience Level: {config.experience_level.value}
@@ -92,7 +126,9 @@ Difficulty Level: {diff.value}
 Interviewer Persona: {config.interviewer_persona.value}
 Interview Language: {config.language}
 Question Number: {question_number} of {config.num_questions}
-{decision_section}
+
+{persona_block}
+{adaptive_block}
 Previously asked questions in this session:
 {prev_q_texts}
 
@@ -100,8 +136,8 @@ STRICT QUALITY RULES:
 1. The question MUST specifically assess '{target_topic}'. Do not divert into unrelated subjects.
 2. The style of the question MUST be '{q_type_str}'.
 3. Do NOT repeat or paraphrase any previously asked question.
-4. Pitch the complexity precisely to the '{diff.value}' difficulty tier for a '{config.experience_level.value}' candidate.
-5. If an Adaptive Directive is provided (e.g. FOLLOW_UP, DEEP_DIVE, CLARIFY, REPHRASE), formulate the question to directly fulfill that directive.
+4. Pitch the complexity precisely to the '{config.experience_level.value}' tier.
+5. Infuse the question text with the conversational tone, greeting/transition style, and wording of the '{config.interviewer_persona.value}' persona.
 
 Expected JSON format:
 {{
@@ -125,14 +161,13 @@ Expected JSON format:
 """
 
 
-
 def build_evaluation_prompt(
     config: InterviewConfig,
     question: Question,
     candidate_answer: str,
     rubric_instructions: Optional[str] = None,
 ) -> str:
-    """Build user prompt for evaluating a candidate's answer with type-specific rubric and evidence extraction."""
+    """Build user prompt for evaluating a candidate's answer with type-specific rubric and persona-styled feedback."""
     expected_pts = question.expected_concepts or question.expected_points or []
     expected_pts_str = (
         "\n".join([f"- {pt}" for pt in expected_pts])
@@ -149,6 +184,7 @@ def build_evaluation_prompt(
     )
 
     q_type_val = question.question_type.value if hasattr(question.question_type, "value") else str(question.question_type or "Technical")
+    fairness_block = PersonaService.format_evaluation_fairness_directive(config.interviewer_persona)
 
     return f"""Interview Context:
 - Target Role: {config.role}
@@ -159,6 +195,8 @@ def build_evaluation_prompt(
 - Difficulty: {question.difficulty.value if hasattr(question.difficulty, 'value') else str(question.difficulty)}
 - Interviewer Persona: {config.interviewer_persona.value}
 - Language: {config.language}
+
+{fairness_block}
 
 Target Interview Question:
 \"\"\"{question.text or question.question_text}\"\"\"
@@ -176,7 +214,7 @@ STRICT EVALUATION INSTRUCTIONS:
 2. Under each criterion or in the evidence array, quote specific phrases from the candidate's answer as grounding evidence.
 3. If an answer is weak or incomplete, specify exactly what was omitted in weaknesses.
 4. Calculate an overall weighted score between 0.0 and 10.0.
-5. Provide actionable feedback aligning with the {config.interviewer_persona.value} persona.
+5. Provide actionable feedback and commentary in the tone of the '{config.interviewer_persona.value}' persona, while strictly maintaining unbiased scoring standards.
 
 Expected JSON format:
 {{
@@ -237,6 +275,7 @@ def build_summary_prompt(
             f"Weaknesses: {', '.join(pair.evaluation.weaknesses)}\n"
         )
     transcript_text = "\n\n".join(transcript_blocks)
+    fairness_block = PersonaService.format_evaluation_fairness_directive(config.interviewer_persona)
 
     return f"""Interview Session Overview:
 - Candidate Name: {config.candidate_name}
@@ -248,10 +287,12 @@ def build_summary_prompt(
 - Language: {config.language}
 - Total Questions Answered: {len(pairs)}
 
+{fairness_block}
+
 Session Transcript and Individual Evaluations:
 {transcript_text}
 
-Generate a comprehensive final interview assessment.
+Generate a comprehensive final interview assessment in the persona tone of '{config.interviewer_persona.value}'.
 
 Expected JSON format:
 {{
@@ -277,3 +318,85 @@ Expected JSON format:
   "disclaimer": "This summary is an AI-assisted pedagogical assessment designed for coaching and practice feedback."
 }}
 """
+
+
+def build_follow_up_prompt(
+    config: InterviewConfig,
+    parent_question: Question,
+    candidate_answer: str,
+    follow_up_plan: FollowUpPlan,
+    question_number: int,
+    evaluation: Optional["AnswerEvaluation"] = None,
+) -> str:
+    """Build prompt for generating a targeted, contextual follow-up question grounded in the candidate's answer and styled by persona."""
+    strengths_str = ", ".join(evaluation.strengths) if evaluation and evaluation.strengths else "N/A"
+    weaknesses_str = ", ".join(evaluation.weaknesses) if evaluation and evaluation.weaknesses else "N/A"
+    score_str = f"{evaluation.score:.1f}/10" if evaluation else "Evaluated"
+
+    parent_text = parent_question.text or parent_question.question_text
+    topic = follow_up_plan.target_topic or parent_question.topic
+    ftype = follow_up_plan.follow_up_type.value
+    anchor = follow_up_plan.anchor_concept_or_quote
+    diff = follow_up_plan.difficulty.value
+    obj = follow_up_plan.objective
+    persona_block = PersonaService.format_persona_prompt_directive(config.interviewer_persona)
+
+    return f"""Contextual Follow-Up Generation (Phase 6 & 7):
+- Target Role: {config.role}
+- Experience Level: {config.experience_level.value}
+- Focus Topic: {topic}
+- Difficulty Level: {diff}
+- Interviewer Persona: {config.interviewer_persona.value}
+- Language: {config.language}
+- Question Number: {question_number} of {config.num_questions}
+
+{persona_block}
+
+Original Parent Question:
+\"\"\"{parent_text}\"\"\"
+
+Candidate's Submitted Response:
+\"\"\"{candidate_answer}\"\"\"
+
+Evaluation Assessment of Previous Response:
+- Previous Score: {score_str}
+- Strengths Identified: {strengths_str}
+- Weaknesses / Gaps: {weaknesses_str}
+
+Follow-Up Directive:
+- Follow-Up Category: {ftype}
+- Anchor Quote / Concept from Answer: \"{anchor}\"
+- Pedagogical Objective: {obj}
+- Rationale: {follow_up_plan.rationale}
+
+STRICT FOLLOW-UP RULES:
+1. Ground the question by explicitly acknowledging what the candidate stated (e.g. \"You mentioned '{anchor}'...\", \"Earlier you stated...\").
+2. The question must strictly fit the '{ftype}' category.
+3. Do NOT ask them to repeat what they already answered clearly. Probe deeper into edge cases, trade-offs, internal mechanics, or practical execution.
+4. Pitch the complexity precisely to the '{config.experience_level.value}' experience tier.
+5. Frame the follow-up question in the tone, wording, and conversational warmth of the '{config.interviewer_persona.value}' persona.
+
+Expected JSON format:
+{{
+  "question_number": {question_number},
+  "text": "The exact conversational follow-up question text directly referencing the candidate's statement",
+  "category": "{config.interview_type.value}",
+  "topic": "{topic}",
+  "difficulty": "{diff}",
+  "question_type": "{parent_question.question_type.value if hasattr(parent_question.question_type, 'value') else 'Technical'}",
+  "is_follow_up": true,
+  "follow_up_type": "{ftype}",
+  "parent_question_id": {parent_question.id or parent_question.question_number or 1},
+  "anchor_reference": "{anchor}",
+  "expected_concepts": [
+    "Key concept expected in ideal follow-up answer 1",
+    "Key concept expected in ideal follow-up answer 2"
+  ],
+  "evaluation_criteria": [
+    "Follow-up evaluation rubric point 1",
+    "Follow-up evaluation rubric point 2"
+  ],
+  "follow_up_possible": true
+}}
+"""
+

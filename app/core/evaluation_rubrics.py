@@ -302,9 +302,14 @@ class EvaluationRubricService:
         # 3. Default fallback
         return RUBRIC_TECHNICAL
 
+    _RUBRIC_INSTRUCTION_CACHE: Dict[str, str] = {}
+
     @classmethod
     def format_rubric_prompt_instructions(cls, rubric: EvaluationRubric) -> str:
-        """Generate formatted prompt text detailing criteria and guidelines for the LLM."""
+        """Generate formatted prompt text detailing criteria and guidelines for the LLM (cached)."""
+        if rubric.category_name in cls._RUBRIC_INSTRUCTION_CACHE:
+            return cls._RUBRIC_INSTRUCTION_CACHE[rubric.category_name]
+
         lines = [
             f"Evaluation Rubric [{rubric.category_name}]:",
             f"General Directive: {rubric.guidelines}",
@@ -313,4 +318,6 @@ class EvaluationRubricService:
         ]
         for c in rubric.criteria:
             lines.append(f"- **{c.name}** (Weight: {c.weight}): {c.description} (Guideline: {c.guiding_question})")
-        return "\n".join(lines)
+        formatted = "\n".join(lines)
+        cls._RUBRIC_INSTRUCTION_CACHE[rubric.category_name] = formatted
+        return formatted

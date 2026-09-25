@@ -34,6 +34,8 @@ from app.schemas.interview import (
     DEFAULT_ASSESSMENT_DISCLAIMER,
 )
 
+from app.performance.timers import measure_time
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,7 @@ class InterviewRepository:
     """Repository handling persistence for interview sessions."""
 
     @staticmethod
+    @measure_time("db_candidate_get_or_create")
     def get_or_create_candidate(session: Session, name: str) -> Candidate:
         """Find existing candidate by name or create a new candidate record."""
         clean_name = name.strip()
@@ -53,6 +56,7 @@ class InterviewRepository:
         return candidate
 
     @staticmethod
+    @measure_time("db_create_interview")
     def create_interview(session: Session, candidate_id: int, config: InterviewConfig) -> Interview:
         """Create a new interview record initialized in IN_PROGRESS status."""
         interview = Interview(
@@ -78,6 +82,7 @@ class InterviewRepository:
 
 
     @staticmethod
+    @measure_time("db_save_question")
     def save_question(session: Session, interview_id: int, question: Question) -> QuestionModel:
         """Persist an AI-generated question for an interview."""
         concepts = question.expected_concepts or question.expected_points or []
@@ -104,6 +109,7 @@ class InterviewRepository:
         return question_model
 
     @staticmethod
+    @measure_time("db_save_answer_and_evaluation")
     def save_answer_and_evaluation(
         session: Session,
         question_id: int,
@@ -145,6 +151,7 @@ class InterviewRepository:
         return answer_model, eval_model
 
     @staticmethod
+    @measure_time("db_finalize_interview")
     def finalize_interview(
         session: Session,
         interview_id: int,
@@ -183,6 +190,7 @@ class InterviewRepository:
         )
 
     @staticmethod
+    @measure_time("db_get_interview_result")
     def get_interview_result(session: Session, interview_id: int) -> Optional[InterviewResult]:
         """Convert persisted interview data into structured InterviewResult schema."""
         interview = InterviewRepository.get_interview(session, interview_id)

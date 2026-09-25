@@ -1,12 +1,13 @@
 """
 Database connection and session lifecycle management.
+Optimized for high performance with SQLite WAL mode, connection pooling, and pragma tuning.
 """
 
 import os
 import logging
 from contextlib import contextmanager
 from typing import Generator
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from app.config.settings import get_settings
 
@@ -22,22 +23,36 @@ if db_url.startswith("sqlite:///./"):
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
 
-# For SQLite, enable check_same_thread=False to support Streamlit multithreading
-connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+# For SQLite, configure thread safety and performance connection args
+connect_args = {"check_same_thread": False, "timeout": 15.0} if db_url.startswith("sqlite") else {}
 
 engine = create_engine(
     db_url,
     connect_args=connect_args,
     echo=False,
+    pool_pre_ping=True,
+    pool_recycle=3600,
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# SQLite Performance Pragma Tuning (WAL mode, Normal sync, Memory temp store, Foreign Keys)
+if db_url.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.close()
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
 
 Base = declarative_base()
 
 
 def init_db() -> None:
-    """Initialize all database tables and perform lightweight schema migrations."""
+    """Initialize all database tables, foreign keys, and indexes."""
     try:
         from app.database import models  # noqa: F401
         from sqlalchemy import text
@@ -86,7 +101,7 @@ def init_db() -> None:
                         conn.execute(text(f"ALTER TABLE evaluations ADD COLUMN {col_name} {col_type}"))
                 conn.commit()
 
-        logger.info("Database initialized successfully.")
+        logger.info("Database initialized successfully with WAL optimization.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise

@@ -15,6 +15,7 @@ from app.schemas.interview import (
     QuestionType,
     StrategyPlan,
     Question,
+    InterviewDecision,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,10 +175,19 @@ class QuestionStrategyService:
         config: InterviewConfig,
         question_number: int,
         asked_questions: Optional[List[Question]] = None,
+        decision: Optional[InterviewDecision] = None,
     ) -> StrategyPlan:
         """
         Retrieve or dynamically generate the StrategyPlan for a specific question index.
+        If an adaptive InterviewDecision is provided, constructs the plan from the decision.
         """
+        if decision:
+            return cls.get_strategy_from_decision(
+                config=config,
+                decision=decision,
+                question_number=question_number,
+            )
+
         full_plan = cls.plan_interview_flow(config)
         if 1 <= question_number <= len(full_plan):
             return full_plan[question_number - 1]
@@ -193,3 +203,26 @@ class QuestionStrategyService:
             difficulty=config.difficulty if config.difficulty != Difficulty.ADAPTIVE else Difficulty.MEDIUM,
             objective=f"Deep-dive assessment on {topic} for {config.role or 'Candidate'}.",
         )
+
+    @classmethod
+    def get_strategy_from_decision(
+        cls,
+        config: InterviewConfig,
+        decision: InterviewDecision,
+        question_number: int,
+    ) -> StrategyPlan:
+        """
+        Construct a StrategyPlan directly from an adaptive InterviewDecision (Phase 5).
+        """
+        q_type = decision.suggested_question_type or QuestionType.TECHNICAL
+        category = f"{config.interview_type.value} - {decision.target_topic}"
+
+        return StrategyPlan(
+            question_number=question_number,
+            question_type=q_type,
+            target_topic=decision.target_topic,
+            category=category,
+            difficulty=decision.target_difficulty,
+            objective=decision.objective,
+        )
+
